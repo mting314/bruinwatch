@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly canary against the live registrar, so we find out it changed its
+    # markup from a failing job rather than from a user.
+    - cron: "17 11 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Format check
+        run: uv run ruff format --check src tests
+      - name: Type check
+        run: uv run mypy src
+      - name: Build image
+        run: docker build -t bruinwatch:ci .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The schema is PostgreSQL-specific (arrays, ON CONFLICT, partial
+        # index), so the DB tests need a real engine. Both ways of getting one
+        # are covered: a service container, and the embedded PGlite that
+        # developers get locally without installing anything.
+        database: [service, pglite]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bruinwatch
+          POSTGRES_PASSWORD: bruinwatch
+          POSTGRES_DB: bruinwatch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bruinwatch"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # PGlite runs Postgres as WebAssembly under Node.
+      - uses: actions/setup-node@v4
+        if: matrix.database == 'pglite'
+        with:
+          node-version: '22'
+
+      - run: uv sync --locked
+
+      - name: Test
+        env:
+          # Unset for the pglite leg, so tests/postgres.py falls through to the
+          # embedded engine instead of the service container.
+          BRUINWATCH_TEST_DATABASE_URL: >-
+            ${{ matrix.database == 'service'
+                && 'postgresql+asyncpg://bruinwatch:bruinwatch@localhost:5432/bruinwatch_test'
+                || '' }}
+          # Never let the database tests skip in CI.
+          BRUINWATCH_REQUIRE_TEST_DB: "1"
+        run: uv run pytest -q
+
+  # Separate job: this one talks to sa.ucla.edu, so it must never gate a PR.
+  # It exists to tell us when the registrar changes its markup.
+  live-registrar:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Probe the live Schedule of Classes
+        run: uv run python -m bruinwatch.scripts.probe "COM SCI" 32 --term 26F

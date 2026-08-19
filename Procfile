@@ -1,1 +1,0 @@
-worker: python speedchat_bot/speedchat-bot.py

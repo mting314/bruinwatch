@@ -1,81 +1,220 @@
-# OK, Find-a-class-and-Enroll-er
+# BruinWatch
 
-A Discord bot that can quickly look up and report UCLA course information. Also can keep track of enrollment status of classes, and message you when they're change from closed to open, etc.
+A Discord bot that looks up UCLA classes and DMs you the moment a section you're
+watching changes enrollment status.
 
-My attempt at imitating Courscicle for specifically UCLA courses. Also might be nice for browsing around classes, it's quite a bit faster than MyUCLA.
+Formerly `speedchat-bot`. The Japanese-dictionary and Toontown Speedchat commands
+have been removed; what's left is the class tracker, rebuilt.
 
-## Commands List
+> The screenshots in `images/` are from the old `~`-prefix interface and haven't
+> been retaken since the move to slash commands.
 
-### ~search_class
+---
 
-`~search_class SUBJECT CATALOG [--term TERM]`
+## What it does
 
-Given a class name (subject + catalog number, i.e. MATH 151AH or COM SCI 32), spit out lots of revelant information.
+| Command | |
+|---|---|
+| `/search subject number [term]` | Show a class's sections; pick one from the dropdown to watch it. Subject and number autocomplete. |
+| `/subject subject [term]` | Page through every course offered under a subject area. |
+| `/history subject number [term]` | Enrollment over time for each section, as a sparkline plus status transitions. |
+| `/watchlist` | Review what you're watching; remove sections inline. |
+| `/unwatch subject number` | Stop watching every section of a course. |
+| `/notify subject number spots` | Also ping when an open section drops to N spots or fewer. |
+| `/alias set\|remove\|list` | Shorthands for awkward subject codes — `CS` → `COM SCI`. |
+| `/about` | What the bot does. |
+| `/admin stats\|sync\|scraper\|resync-commands` | Owner-only. |
 
-![search_class](images/search.png)
+You'll get a DM when a watched section's status changes — `Full → Open`,
+`Open → Waitlist`, and so on — and, if you set one, when it crosses your
+spots-left threshold.
 
-If term isn't provided, defaults to whatever the default term is set to (can see with `~default_term`).
+## How it polls
 
-Then, asks user to react with an emoji choice, corresponding to whatever class they want to add to their watchlist.
+The registrar has no API, so BruinWatch scrapes the public
+[Schedule of Classes](https://sa.ucla.edu/ro/Public/SOC/). The scraping design
+follows [hotseat.io](https://github.com/hotseatio/hotseat.io), which has run
+against the same source in production for years.
 
-### ~display_class
+Four tiers, each matched to how fast its data actually moves:
 
-`~display_class SUBJECT CATALOG [--term TERM]`
+| Tier | Cadence | Scope |
+|---|---|---|
+| Terms | daily | the term dropdown |
+| Subject areas | weekly | per active term |
+| Course catalog | daily | every subject in every active term |
+| All sections | hourly | full sweep; this is what builds the enrollment history |
+| **Watched sections** | **adaptive, 30s – 15m** | only sections somebody subscribes to |
 
-Very similar to `search_class` (same format for arguments), but doesn't give emoji options, and instead displays description.
+The watched tier settles at 2 minutes during campus daytime hours and drops to
+15 minutes overnight, and speeds up to 30 seconds while an enrollment pass
+window is open. Consecutive failures trip a circuit breaker that backs off and
+DMs the owner rather than hammering a registrar that's already having a bad day.
 
-### ~subject
+> **Pass windows are entered by hand.** The registrar publishes them on a page
+> whose URL changes yearly, so — as hotseat.io also does — you record them with
+> `/admin enrollment-window`. Until you do, there is no 30-second tier: polling
+> just alternates between the 2-minute and 15-minute rates.
 
-`~subject SUBJECT [--term TERM] [--deep]`
+Two properties matter for load:
 
-Displays all classes offered under the given subject in the given term, or default term if not provided.
+- **Requests scale with watched sections, not subscribers.** The poller reads
+  `DISTINCT section_id` from `subscriptions` and fetches each *course* once, so
+  fifty people watching the same lecture cost one request, not fifty.
+- **Concurrency is capped** by a process-wide semaphore (default 10) over a
+  single pooled HTTP/2 client, with exponential backoff and a descriptive
+  User-Agent.
 
-If the `--deep` flag isn't provided, displays just the names of the classes offered, 10 at a time. You can scroll through more with the left and right arrow emojis.
+### Change detection
 
-![shallow_subject](images/shallow.PNG)
+Ported from hotseat's `SaveSection`. In one transaction, per section:
 
-However, if the `--deep` flag is provided, displays embeds for every offering of the each course, 5 at a time.
+1. read the previously stored enrollment numbers;
+2. upsert the section;
+3. if **any** number moved → append a row to `enrollment_data` (this is the
+   history `/history` charts);
+4. if the **enrollment status** changed → queue a DM per subscriber.
 
-![deep_subject](images/deep.PNG)
+A section we've never seen before seeds the history series but notifies nobody.
+Notifications go into a `notification_outbox` table and are delivered by a
+separate loop, so a restart mid-fan-out can neither drop nor duplicate a DM.
 
-### ~see_watchlist
+The rules live in [`services/changes.py`](src/bruinwatch/services/changes.py) as
+pure functions, and are tested there without a database.
 
-`~see_watchlist`
+### Why there's no course-model cache
 
-Displays embeds for each class in the command author's watchlist.
+The registrar's AJAX endpoints want an opaque JSON `model` blob with a base64
+`Token`. The obvious way to get one is to scrape it off a results page — which
+is what this bot used to do, caching a blob for every course in the catalog.
 
-![watchlist](images/watchlist.PNG)
+It turns out that blob is a pure function of the subject code and catalog
+number, so [`registrar/model.py`](src/bruinwatch/registrar/model.py) just builds
+it. That deleted the entire cache, and with it the multi-minute "reloading the
+class names JSON" step that used to block commands.
 
-### ~remove_class
+`tests/test_model.py` checks our output against models the registrar emitted for
+itself, captured in the fixtures — if the construction ever drifts, the tests
+fail loudly instead of every scrape silently returning nothing.
 
-`~remove_class`
+---
 
-Shows all classes in command author's watchlist, and presents emoji choices if they want to remove one from the watchlist.
+## Running it
 
-### ~clear_classes
+Needs a Discord bot token and PostgreSQL. No privileged gateway intents:
+everything is a slash command, so `message_content` is not required.
 
-`~clear_classes` 
+### Docker
 
-Removes all classes from the command author's watchlist. This means they won't recieve any more notifications until more classes are readded. Helpful if you suspect some data in the watchlist got corrupted, like when you know you added classes to the list, but using `~see_watchlist` isn't working. 
+```bash
+cp .env.example .env      # fill in BRUINWATCH_DISCORD_TOKEN and BRUINWATCH_OWNER_ID
+docker compose up --build
+```
 
-### ~alias
+Compose brings up Postgres, runs `alembic upgrade head`, then starts the bot.
+A health endpoint reporting gateway and scraper state is on
+<http://localhost:8080/healthz>.
 
-`~alias ALIAS [--target TARGET]`
+### Locally
 
-Adds an alias for a certain subject name to the command author's collection. This is meant to help people set more convenient and well-known shorthands for many subjects, like "CS" as opposed to "COM SCI". When an alias is set for a user, they will be able to look up classes with that alias.
+```bash
+uv sync
+cp .env.example .env
+createdb bruinwatch                       # or point BRUINWATCH_DATABASE_URL elsewhere
+uv run alembic upgrade head
+uv run python -m bruinwatch
+```
 
-![alias](images/alias.PNG)
+Set `BRUINWATCH_DEV_GUILD_ID` to sync slash commands to one guild instantly;
+global commands take about an hour to propagate.
 
-### ~remove_alias
+### Configuration
 
-`~remove_alias ALIAS`
+Every setting is a `BRUINWATCH_`-prefixed environment variable — see
+[`.env.example`](.env.example) and [`config.py`](src/bruinwatch/config.py).
+Notable ones: `MAX_CONCURRENCY`, `REQUEST_TIMEOUT`, `CIRCUIT_BREAKER_THRESHOLD`,
+and `SCHEDULER_ENABLED=false` to run the bot with no background scraping.
 
-Unmaps the given alias.
+---
 
-### ~see_aliases
+## Development
 
-`~see_aliases`
+```bash
+uv sync
+uv run ruff check src tests
+uv run ruff format src tests
+uv run mypy src
+uv run pytest
+```
 
-Displays a small simple embed of all aliases you have set, if you have any.
+**The whole suite runs with no Docker and no Postgres installed.** Parser tests
+use saved registrar responses in `tests/fixtures/`, HTTP is stubbed with
+`respx`, and the database tests get a real PostgreSQL from
+[PGlite](https://pglite.dev) — Postgres compiled to WebAssembly, started
+in-process over a TCP socket. The only requirement is Node on your PATH. (This
+is the same approach the sibling `ll-predictions` repo uses in
+`scripts/dev-up.ts`.)
 
-![see_alias](images/see_aliases.PNG)
+The schema is PostgreSQL-specific — `TEXT[]` columns, `INSERT ... ON CONFLICT
+... RETURNING`, a partial index — so those tests need a genuine engine rather
+than SQLite pretending to be one.
+
+To test against a real server instead, point the tests at it:
+
+```bash
+createdb bruinwatch_test
+BRUINWATCH_TEST_DATABASE_URL=postgresql+asyncpg://localhost/bruinwatch_test uv run pytest
+```
+
+That takes precedence over PGlite. Without Node and without the variable, the
+database tests skip with an explanatory message — set
+`BRUINWATCH_REQUIRE_TEST_DB=1` to turn that skip into a failure, which is what
+CI does. CI runs the suite twice: once against a Postgres 16 service container
+and once against PGlite, so neither path can rot.
+
+`tests/test_schema.py` compares the Alembic migration's DDL against the
+SQLAlchemy models, so a model change without a migration fails CI. It needs no
+database at all.
+
+See [`tests/postgres.py`](tests/postgres.py) for how the database is chosen and
+which PGlite quirks the fixtures work around.
+
+### Checking the live registrar
+
+When a scrape looks wrong, ask the registrar directly — no bot, no database:
+
+```bash
+uv run python -m bruinwatch.scripts.probe "COM SCI" 32 --term 26F
+uv run python -m bruinwatch.scripts.probe MATH 31A --term 26F --json
+```
+
+It prints the `model` it built and everything parsed out of the response. If it
+finds nothing for a class you know is offered, the registrar changed its markup.
+CI runs this weekly as a canary.
+
+### Layout
+
+```
+src/bruinwatch/
+  registrar/   pure UCLA layer: model building, HTTP client, parsers. No DB, no Discord.
+  db/          SQLAlchemy models, queries, Alembic migrations.
+  services/    change detection, scheduling, notification delivery.
+  cogs/        slash commands.
+  ui/          embeds and interactive components.
+```
+
+`registrar/` and `services/changes.py` have no framework dependencies, which is
+why the interesting logic is easy to test.
+
+---
+
+## A note on scraping
+
+This hits a public, unauthenticated page that any student can load in a browser,
+at a rate well below what a person clicking refresh would generate: an hourly
+full sweep, bounded concurrency, and faster polling only for classes somebody
+explicitly asked about. Please keep it that way if you fork it.
+
+## License
+
+MIT.

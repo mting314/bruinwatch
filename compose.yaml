@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bruinwatch
+      POSTGRES_PASSWORD: bruinwatch
+      POSTGRES_DB: bruinwatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bruinwatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: brings the schema up to head before the bot starts.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    environment:
+      BRUINWATCH_DATABASE_URL: postgresql+asyncpg://bruinwatch:bruinwatch@db:5432/bruinwatch
+    depends_on:
+      db:
+        condition: service_healthy
+
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      BRUINWATCH_DATABASE_URL: postgresql+asyncpg://bruinwatch:bruinwatch@db:5432/bruinwatch
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pgdata:

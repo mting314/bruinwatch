@@ -1,10 +1,19 @@
+.env
 **/*.env
-**/__pycache__
+!.env.example
 
+__pycache__/
+*.py[cod]
+.venv/
 env/
-.vscode/launch.json
-.vscode/settings.json
-.vscode/.ropeproject/config.py
-.vscode/.ropeproject/objectdb
+venv/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.idea/
+.vscode/
 debug.log
-speedchat_bot/.vscode/launch.json

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     #: of generous pools.
     db_pool_size: int = Field(default=10, ge=1, le=50)
     db_max_overflow: int = Field(default=5, ge=0, le=50)
+    #: Pin a single connection instead of pooling. Needed to point any of the
+    #: CLIs at an in-process PGlite, which serves one connection at a time.
+    db_single_connection: bool = False
 
     scheduler_enabled: bool = True
     #: Consecutive scrape failures before the watched-section job backs off.

@@ -193,6 +193,48 @@ end labels, so no value is ever reachable by colour alone.
 
 ---
 
+## Publishing it for free (no servers, no cloud database)
+
+The site is a pure function of scraped data, so it can be pre-rendered and
+served as static files. `.github/workflows/publish.yml` does the whole thing on
+GitHub's infrastructure:
+
+1. spin up Postgres as a **service container** (exists only for the run)
+2. restore the previous database from a **release asset**
+3. `bruinwatch-scrape all-sections`
+4. `bruinwatch-render --out dist`
+5. publish `dist` to **GitHub Pages**, re-upload the database
+
+**Total cost $0.** Public repos get unlimited Actions minutes and free Pages
+hosting, and nothing is left running between builds — no VM, no Cloud SQL, no
+IP address.
+
+```bash
+uv run bruinwatch-render --out dist        # the same build, locally
+```
+
+Static output uses directory-per-page URLs with slugged segments
+(`/course/com-sci/32/`, `/course/c-s-bio/m120/`) because a file host has no
+query strings or path parameters. `bruinwatch.web.links` produces either URL
+shape from one call site, and the tests assert that **every internal link in the
+rendered output resolves to a file that exists** — the failure mode that makes a
+static build look fine locally and 404 in production.
+
+Things to know before relying on it:
+
+- **Scheduled workflows are disabled after 60 days of repo inactivity** on
+  public repos. A commit or a manual re-enable resets the clock.
+- **Actions cron is best-effort** and can slip 10+ minutes, so treat the
+  six-hourly schedule as approximate. Enrollment history gets correspondingly
+  coarser than a dedicated poller's.
+- **Pages caps a site at 1 GB.** One term of every course is ~137 MB of HTML;
+  the default `--max-courses 5000` keeps it well under, and anything dropped is
+  reported rather than silently truncated.
+- **The published data is public**, which is fine — it is scraped from a public
+  page — but the release asset holding the database is public too.
+
+---
+
 ## Running it without Discord
 
 The Discord gateway WebSocket is the only thing that forces an always-on

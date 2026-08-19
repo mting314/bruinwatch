@@ -58,6 +58,7 @@ async def run(args: argparse.Namespace) -> int:
         settings.database_url,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        single_connection=settings.db_single_connection,
     )
     factory = create_session_factory(engine_db)
     client = RegistrarClient(

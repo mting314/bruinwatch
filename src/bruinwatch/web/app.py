@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .. import analytics
 from ..db import repo
-from . import charts, render
+from . import charts, links, render
 from .charts import Bar, Point, Series, esc
 
 if TYPE_CHECKING:
@@ -54,6 +54,23 @@ async def stats_overview(request: web.Request) -> web.Response:
         pressure = await analytics.subject_pressure(session, term)
         speed = await analytics.fastest_filling(session, term)
 
+    return web.Response(
+        text=render_overview(term, summary, statuses, demand, pressure, speed, demo=_demo(request)),
+        content_type="text/html",
+    )
+
+
+def render_overview(
+    term: str,
+    summary: analytics.Summary,
+    statuses: list[analytics.StatusCount],
+    demand: list[analytics.CourseDemand],
+    pressure: list[analytics.SubjectPressure],
+    speed: list[analytics.FillSpeed],
+    *,
+    demo: bool = False,
+) -> str:
+    """The overview page. Shared by the live server and the static renderer."""
     body: list[str] = []
 
     if not summary.has_history:
@@ -100,14 +117,11 @@ async def stats_overview(request: web.Request) -> web.Response:
     body.append(_pressure_card(pressure))
     body.append(_speed_card(speed))
 
-    return web.Response(
-        text=render.page(
-            "Stats",
-            "".join(body),
-            subtitle=f"Enrollment analytics for {term}.",
-            demo=_demo(request),
-        ),
-        content_type="text/html",
+    return render.page(
+        "Stats",
+        "".join(body),
+        subtitle=f"Enrollment analytics for {term}.",
+        demo=demo,
     )
 
 
@@ -138,14 +152,14 @@ def _demand_card(demand: list[analytics.CourseDemand], term: str) -> str:
             label=d.label,
             value=d.demand_ratio,
             display=f"{d.demand_ratio:.2f}×",
-            href=f"/stats/course/{d.subject_area_code}/{d.course_number}?term={term}",
+            href=links.course(d.subject_area_code, d.course_number, term),
         )
         for d in demand
     ]
     rows = [
         [
-            f'<a href="/stats/course/{esc(d.subject_area_code)}/{esc(d.course_number)}'
-            f'?term={esc(term)}">{esc(d.label)}</a>',
+            f'<a href="{esc(links.course(d.subject_area_code, d.course_number, term))}">'
+            f"{esc(d.label)}</a>",
             esc(d.title),
             f"{d.enrolled:,}",
             f"{d.capacity:,}",
@@ -268,6 +282,16 @@ async def course_index(request: web.Request) -> web.Response:
             )
         courses = await analytics.tracked_courses(session, term)
 
+    return web.Response(
+        text=render_course_index(term, courses, demo=_demo(request)),
+        content_type="text/html",
+    )
+
+
+def render_course_index(
+    term: str, courses: list[tuple[str, str, str]], *, demo: bool = False
+) -> str:
+    """The course index. Shared by the live server and the static renderer."""
     if not courses:
         body = render.card(
             "Courses with history",
@@ -276,8 +300,7 @@ async def course_index(request: web.Request) -> web.Response:
     else:
         rows = [
             [
-                f'<a href="/stats/course/{esc(code)}/{esc(number)}?term={esc(term)}">'
-                f"{esc(code)} {esc(number)}</a>",
+                f'<a href="{esc(links.course(code, number, term))}">{esc(code)} {esc(number)}</a>',
                 esc(title),
             ]
             for code, number, title in courses
@@ -288,13 +311,7 @@ async def course_index(request: web.Request) -> web.Response:
             hint=f"{len(courses):,} courses have recorded enrollment history in {term}, "
             "most-observed first.",
         )
-
-    return web.Response(
-        text=render.page(
-            "Courses", body, subtitle=f"Tracked courses in {term}.", demo=_demo(request)
-        ),
-        content_type="text/html",
-    )
+    return render.page("Courses", body, subtitle=f"Tracked courses in {term}.", demo=demo)
 
 
 async def course_detail(request: web.Request) -> web.Response:
@@ -312,18 +329,30 @@ async def course_detail(request: web.Request) -> web.Response:
     if not series:
         raise web.HTTPNotFound(text=f"no data for {subject} {number} in {term}")
 
+    return web.Response(
+        text=render_course_detail(subject, number, term, series, peaks, demo=_demo(request)),
+        content_type="text/html",
+    )
+
+
+def render_course_detail(
+    subject: str,
+    number: str,
+    term: str,
+    series: list[analytics.SectionSeries],
+    peaks: list[analytics.TermPeak],
+    *,
+    demo: bool = False,
+) -> str:
+    """A course page. Shared by the live server and the static renderer."""
     body = [_fill_curve_card(series, term), _sections_table_card(series)]
     if peaks:
         body.append(_term_history_card(peaks))
-
-    return web.Response(
-        text=render.page(
-            f"{subject} {number}",
-            "".join(body),
-            subtitle=f"{subject} {number} — enrollment over time in {term}.",
-            demo=_demo(request),
-        ),
-        content_type="text/html",
+    return render.page(
+        f"{subject} {number}",
+        "".join(body),
+        subtitle=f"{subject} {number} — enrollment over time in {term}.",
+        demo=demo,
     )
 
 
@@ -440,18 +469,18 @@ def _term_history_card(peaks: list[analytics.TermPeak]) -> str:
 # --------------------------------------------------------------------------
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        out = {f.name: _jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
+        out = {f.name: jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
         # Derived properties are the interesting part; include them too.
         for name in dir(type(value)):
             if isinstance(getattr(type(value), name, None), property):
-                out[name] = _jsonable(getattr(value, name))
+                out[name] = jsonable(getattr(value, name))
         return out
     if isinstance(value, dt.datetime):
         return value.isoformat()
     if isinstance(value, list | tuple):
-        return [_jsonable(v) for v in value]
+        return [jsonable(v) for v in value]
     return value
 
 
@@ -461,12 +490,12 @@ async def api_summary(request: web.Request) -> web.Response:
         term = request.query.get("term") or await repo.default_term_code(session)
         payload: dict[str, Any] = {
             "term": term,
-            "summary": _jsonable(await analytics.summary(session)),
+            "summary": jsonable(await analytics.summary(session)),
         }
         if term:
-            payload["status_breakdown"] = _jsonable(await analytics.status_breakdown(session, term))
-            payload["most_in_demand"] = _jsonable(await analytics.most_in_demand(session, term))
-            payload["subject_pressure"] = _jsonable(await analytics.subject_pressure(session, term))
+            payload["status_breakdown"] = jsonable(await analytics.status_breakdown(session, term))
+            payload["most_in_demand"] = jsonable(await analytics.most_in_demand(session, term))
+            payload["subject_pressure"] = jsonable(await analytics.subject_pressure(session, term))
     return web.json_response(payload)
 
 
@@ -487,8 +516,8 @@ async def api_course(request: web.Request) -> web.Response:
             "subject_area_code": subject,
             "course_number": number,
             "term": term,
-            "sections": _jsonable(series),
-            "term_peaks": _jsonable(peaks),
+            "sections": jsonable(series),
+            "term_peaks": jsonable(peaks),
         }
     )
 

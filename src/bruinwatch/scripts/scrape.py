@@ -22,7 +22,7 @@ import structlog
 
 from .. import logging as log_setup
 from ..config import Settings
-from ..db.session import create_engine, create_session_factory
+from ..db.session import create_engine, create_session_factory, wait_for_database
 from ..registrar import RegistrarClient
 from ..services.scheduler import ScraperService
 
@@ -39,8 +39,10 @@ async def run(job: str, rate: float | None, concurrency: int) -> int:
         settings.database_url,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        single_connection=settings.db_single_connection,
     )
     factory = create_session_factory(engine)
+    await wait_for_database(engine)
     client = RegistrarClient(
         user_agent=settings.user_agent,
         max_concurrency=concurrency,

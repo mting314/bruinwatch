@@ -32,6 +32,8 @@ bruinwatch-backfill = "bruinwatch.scripts.backfill:main"
 # the stats site on its own. Neither needs a long-lived process.
 bruinwatch-scrape = "bruinwatch.scripts.scrape:main"
 bruinwatch-web = "bruinwatch.scripts.web:main"
+# Writes the whole site to a directory of static files, for GitHub Pages.
+bruinwatch-render = "bruinwatch.scripts.render:main"
 
 [dependency-groups]
 dev = [

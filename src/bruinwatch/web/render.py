@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 
+from . import links
 from .charts import esc
 
 STYLE = """
@@ -212,9 +213,9 @@ def page(title: str, body: str, *, subtitle: str = "", demo: bool = False) -> st
         '</head><body><div class="wrap">'
         f"{banner}"
         '<header class="site"><h1>BruinWatch</h1>'
-        '<nav><a href="/stats">Overview</a>'
-        '<a href="/stats/courses">Courses</a>'
-        '<a href="/api/stats/summary">API</a></nav></header>'
+        f'<nav><a href="{links.overview()}">Overview</a>'
+        f'<a href="{links.course_index()}">Courses</a>'
+        f'<a href="{links.api_summary()}">API</a></nav></header>'
         f"{sub}{body}"
         '<footer class="site">Scraped from the UCLA Registrar\'s public '
         '<a href="https://sa.ucla.edu/ro/Public/SOC/">Schedule of Classes</a>. '

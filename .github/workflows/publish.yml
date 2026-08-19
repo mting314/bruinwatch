@@ -1,0 +1,126 @@
+name: Scrape and publish
+
+# Scrapes the registrar and publishes a static site to GitHub Pages. No server
+# and no hosted database: Postgres lives in a service container for the length
+# of the run, and its contents are carried between runs as a release asset.
+#
+# Everything here is free on a public repo — unlimited Actions minutes and Pages
+# hosting — which is the point.
+
+on:
+  schedule:
+    # Every six hours. Actions cron is best-effort and can be delayed by 10+
+    # minutes under load, so treat this as "roughly every six hours".
+    - cron: "20 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      full_catalog:
+        description: "Also refresh the course catalog (slow; needed after a new term opens)"
+        type: boolean
+        default: false
+
+# Never let two runs write the database asset at once.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write # to read/write the database release asset
+  pages: write
+  id-token: write
+
+env:
+  # The database only has to survive the job; PGlite's URL args are not needed
+  # here because this is a real Postgres.
+  BRUINWATCH_DATABASE_URL: postgresql+asyncpg://bruinwatch:bruinwatch@localhost:5432/bruinwatch
+  BRUINWATCH_DB_POOL_SIZE: "4"
+  BRUINWATCH_LOG_LEVEL: INFO
+  # The registrar is a public university endpoint, not a load test.
+  SCRAPE_RATE: "5"
+  DB_RELEASE_TAG: database
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bruinwatch
+          POSTGRES_PASSWORD: bruinwatch
+          POSTGRES_DB: bruinwatch
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bruinwatch"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+
+      - name: Restore the database from the previous run
+        id: restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release download "$DB_RELEASE_TAG" --pattern 'bruinwatch.dump' --clobber 2>/dev/null; then
+            echo "Restoring $(du -h bruinwatch.dump | cut -f1) dump"
+            pg_restore --no-owner --no-privileges -d "postgresql://bruinwatch:bruinwatch@localhost:5432/bruinwatch" bruinwatch.dump
+            echo "restored=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No previous dump; starting from an empty database."
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Migrate
+        run: uv run alembic upgrade head
+
+      - name: Bootstrap (first run only)
+        if: steps.restore.outputs.restored != 'true'
+        run: uv run bruinwatch-scrape bootstrap --rate "$SCRAPE_RATE"
+
+      - name: Refresh the catalog
+        # Slow (~168 subjects), so only on demand or when starting fresh.
+        if: >-
+          steps.restore.outputs.restored != 'true' ||
+          inputs.full_catalog
+        run: uv run bruinwatch-scrape catalog --rate "$SCRAPE_RATE"
+
+      - name: Scrape sections
+        run: uv run bruinwatch-scrape all-sections --rate "$SCRAPE_RATE"
+
+      - name: Render the static site
+        run: uv run bruinwatch-render --out dist
+
+      - name: Save the database for the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pg_dump --format=custom --no-owner --no-privileges \
+            "postgresql://bruinwatch:bruinwatch@localhost:5432/bruinwatch" -f bruinwatch.dump
+          echo "Dump is $(du -h bruinwatch.dump | cut -f1)"
+          gh release view "$DB_RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$DB_RELEASE_TAG" --title "Scraped database" \
+              --notes "Carries enrollment history between scheduled runs. Rewritten each run."
+          gh release upload "$DB_RELEASE_TAG" bruinwatch.dump --clobber
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: scrape
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

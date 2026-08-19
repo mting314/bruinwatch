@@ -23,7 +23,7 @@ from aiohttp import web
 
 from .. import logging as log_setup
 from ..config import Settings
-from ..db.session import create_engine, create_session_factory
+from ..db.session import create_engine, create_session_factory, wait_for_database
 from ..web.app import build_standalone_app
 
 
@@ -36,8 +36,10 @@ async def serve(port: int) -> int:
         settings.database_url,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        single_connection=settings.db_single_connection,
     )
     sessions = create_session_factory(engine)
+    await wait_for_database(engine)
 
     app = build_standalone_app(sessions)
 

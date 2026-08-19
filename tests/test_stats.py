@@ -382,3 +382,55 @@ def test_demo_instructors_are_not_real_people():
     from bruinwatch.scripts.demo import INSTRUCTORS
 
     assert all(name.startswith("Instructor ") for name in INSTRUCTORS)
+
+
+# -- standalone site (no Discord bot) --------------------------------------
+
+
+@pytest_asyncio.fixture
+async def standalone_client(sessions, aiohttp_client):
+    from bruinwatch.web.app import build_standalone_app
+
+    return await aiohttp_client(build_standalone_app(sessions))
+
+
+async def test_standalone_serves_the_stats_site(standalone_client, seeded):
+    """The site must work with no bot behind it -- that is what lets it scale
+    to zero, since only the Discord gateway forces an always-on process."""
+    resp = await standalone_client.get("/stats")
+    assert resp.status == 200
+    assert "COM SCI 32" in await resp.text()
+
+
+async def test_standalone_healthz_reports_database_reachability(standalone_client, seeded):
+    resp = await standalone_client.get("/healthz")
+    assert resp.status == 200
+    assert await resp.json() == {"ok": True}
+
+
+async def test_standalone_healthz_fails_when_the_database_is_gone(aiohttp_client):
+    """A read-only site's only real health question."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from bruinwatch.db.session import create_session_factory
+    from bruinwatch.web.app import build_standalone_app
+
+    dead = create_session_factory(
+        create_async_engine("postgresql+asyncpg://nobody@127.0.0.1:1/nothing")
+    )
+    client = await aiohttp_client(build_standalone_app(dead))
+    resp = await client.get("/healthz")
+    assert resp.status == 503
+    assert (await resp.json())["ok"] is False
+
+
+async def test_standalone_root_redirects_to_stats(standalone_client, seeded):
+    resp = await standalone_client.get("/", allow_redirects=False)
+    assert resp.status == 302
+    assert resp.headers["Location"] == "/stats"
+
+
+async def test_standalone_api_works(standalone_client, seeded):
+    resp = await standalone_client.get("/api/stats/summary")
+    assert resp.status == 200
+    assert (await resp.json())["term"] == "26F"

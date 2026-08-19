@@ -28,6 +28,10 @@ bruinwatch = "bruinwatch.__main__:run"
 bruinwatch-demo = "bruinwatch.scripts.demo:main"
 # Walks past terms and records their catalogs. Resumable; rate-limited.
 bruinwatch-backfill = "bruinwatch.scripts.backfill:main"
+# The two halves of the bot, minus Discord: a one-shot scraper for cron, and
+# the stats site on its own. Neither needs a long-lived process.
+bruinwatch-scrape = "bruinwatch.scripts.scrape:main"
+bruinwatch-web = "bruinwatch.scripts.web:main"
 
 [dependency-groups]
 dev = [

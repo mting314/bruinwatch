@@ -40,7 +40,11 @@ class BruinWatchBot(commands.Bot):
             owner_id=settings.owner_id,
         )
         self.settings = settings
-        self.engine = create_engine(settings.database_url)
+        self.engine = create_engine(
+            settings.database_url,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+        )
         self.sessions: async_sessionmaker[AsyncSession] = create_session_factory(self.engine)
         self.registrar = RegistrarClient(
             user_agent=settings.user_agent,

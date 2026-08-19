@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     request_timeout: float = Field(default=20.0, gt=0)
     max_retries: int = Field(default=3, ge=0, le=10)
 
+    #: Connection pool size. The default suits the long-lived bot; a one-shot
+    #: job or a scale-to-zero web service wants far fewer, and a small managed
+    #: Postgres (Cloud SQL micro allows ~25 total) can be exhausted by a couple
+    #: of generous pools.
+    db_pool_size: int = Field(default=10, ge=1, le=50)
+    db_max_overflow: int = Field(default=5, ge=0, le=50)
+
     scheduler_enabled: bool = True
     #: Consecutive scrape failures before the watched-section job backs off.
     circuit_breaker_threshold: int = Field(default=5, ge=1)

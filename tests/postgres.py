@@ -25,7 +25,8 @@ PGlite quirks, all handled by the fixtures in ``conftest.py``:
   connect retry;
 * it does not complete a graceful connection shutdown, so the engine is
   disposed with ``close=False``;
-* it refuses asyncpg's SSL upgrade and its prepared-statement caching.
+* it refuses asyncpg's SSL upgrade and its prepared-statement caching, both
+  disabled via URL query parameters above.
 """
 
 from __future__ import annotations
@@ -39,8 +40,11 @@ from contextlib import closing, contextmanager
 
 ENV_VAR = "BRUINWATCH_TEST_DATABASE_URL"
 
-#: asyncpg needs both of these to talk to PGlite at all.
-PGLITE_CONNECT_ARGS: dict[str, object] = {"ssl": False, "statement_cache_size": 0}
+#: asyncpg needs both of these to talk to PGlite at all. Expressed as URL
+#: query parameters rather than connect_args so that any code taking only a
+#: connection string -- the bruinwatch-web and bruinwatch-scrape CLIs, which
+#: read one from the environment -- can be pointed at PGlite unchanged.
+PGLITE_URL_ARGS = "ssl=disable&prepared_statement_cache_size=0"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -90,8 +94,11 @@ def provide() -> Iterator[TestDatabase | None]:
     port = _free_port()
     with PGliteManager(PGliteConfig(use_tcp=True, tcp_port=port, log_level="WARNING")):
         yield TestDatabase(
-            url=f"postgresql+asyncpg://postgres:postgres@127.0.0.1:{port}/postgres",
-            connect_args=dict(PGLITE_CONNECT_ARGS),
+            url=(
+                f"postgresql+asyncpg://postgres:postgres@127.0.0.1:{port}"
+                f"/postgres?{PGLITE_URL_ARGS}"
+            ),
+            connect_args={},
             embedded=True,
         )
 

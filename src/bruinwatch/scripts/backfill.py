@@ -54,7 +54,11 @@ async def run(args: argparse.Namespace) -> int:
         print("\n--dry-run: stopping before any request.")
         return 0
 
-    engine_db = create_engine(settings.database_url)
+    engine_db = create_engine(
+        settings.database_url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+    )
     factory = create_session_factory(engine_db)
     client = RegistrarClient(
         user_agent=settings.user_agent,

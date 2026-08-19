@@ -13,13 +13,25 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def create_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
+def create_engine(
+    database_url: str,
+    *,
+    echo: bool = False,
+    pool_size: int = 10,
+    max_overflow: int = 5,
+) -> AsyncEngine:
+    """Build the async engine.
+
+    Pool size is a parameter because the right value differs sharply by
+    caller: the bot holds one long-lived pool, a one-shot scrape job needs a
+    couple of connections, and a small managed Postgres has few to give.
+    """
     return create_async_engine(
         database_url,
         echo=echo,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=5,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
     )
 
 

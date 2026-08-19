@@ -522,6 +522,36 @@ def add_routes(
     app.router.add_get("/api/stats/course/{subject}/{number}", api_course)
 
 
+def build_standalone_app(
+    sessions: async_sessionmaker[AsyncSession], *, demo: bool = False
+) -> web.Application:
+    """The stats site with no bot behind it.
+
+    Used by ``bruinwatch-web``. The health check reports the only thing a
+    read-only site can be unhealthy about -- whether it can reach the database
+    -- rather than gateway state that does not exist here.
+    """
+    app = web.Application()
+    add_routes(app, sessions, demo=demo)
+
+    async def healthz(_: web.Request) -> web.Response:
+        from sqlalchemy import text
+
+        try:
+            async with sessions() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": repr(exc)}, status=503)
+        return web.json_response({"ok": True})
+
+    async def index(_: web.Request) -> web.Response:
+        raise web.HTTPFound("/stats")
+
+    app.router.add_get("/healthz", healthz)
+    app.router.add_get("/", index)
+    return app
+
+
 def build_app(bot: BruinWatchBot) -> web.Application:
     """The full site: health check plus stats."""
     from ..health import add_health_routes

@@ -193,6 +193,33 @@ end labels, so no value is ever reachable by colour alone.
 
 ---
 
+## Running it without Discord
+
+The Discord gateway WebSocket is the only thing that forces an always-on
+process. Switch the bot off and the same code runs as a scheduled job plus a
+scale-to-zero website:
+
+```bash
+uv run bruinwatch-scrape all-sections     # one tier, then exit — for cron
+uv run bruinwatch-web --port 8080         # stats site only, no bot
+```
+
+`bruinwatch-scrape` runs any single tier (`terms`, `subject-areas`, `catalog`,
+`all-sections`, `watched`, `bootstrap`) and exits non-zero on failure, so a
+scheduler can alert. `bruinwatch-web` serves `/stats` and a database-reachability
+`/healthz`, holds nothing open, and reads `$PORT`.
+
+On GCP that means a Cloud Run Job on Cloud Scheduler plus a Cloud Run service —
+both of which fit inside the monthly free tier at this workload's size, leaving
+the database as the entire bill. Set `BRUINWATCH_DB_POOL_SIZE` low (1–3) for
+short-lived jobs and small managed instances; Cloud SQL's smallest tier allows
+only ~25 connections in total.
+
+What you lose: watch notifications, and the `/watch` and `/alias` commands.
+Enrollment history keeps accumulating, so the stats site keeps improving.
+
+---
+
 ## Running it
 
 Needs a Discord bot token and PostgreSQL. No privileged gateway intents:

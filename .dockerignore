@@ -9,9 +9,11 @@ __pycache__
 .env
 tests
 images
-README.md
 compose.yaml
 Dockerfile
+
+# NOT ignored: README.md — pyproject declares `readme = "README.md"`, so
+# hatchling needs it in the context to build the project.
 
 .pytest_cache
 .mypy_cache

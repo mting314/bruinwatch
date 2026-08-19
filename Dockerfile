@@ -13,7 +13,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-dev
 
 COPY src/ ./src/
-COPY alembic.ini ./
+# README.md is package metadata (pyproject `readme`), not just docs — the
+# project build fails without it. Copied here, after the dependency layer, so
+# editing prose does not invalidate the cached dependency install.
+COPY alembic.ini README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 

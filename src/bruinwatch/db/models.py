@@ -118,7 +118,9 @@ class Section(Base):
     times: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     locations: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     instructors: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
-    units: Mapped[str] = mapped_column(String(16), default="")
+    #: Wider than it looks like it needs: variable-unit courses carry values
+    #: like "4.0/6.0 Alternate" (17 chars). See migration 0002.
+    units: Mapped[str] = mapped_column(String(32), default="")
 
     enrollment_status: Mapped[str] = mapped_column(String(32), default="Unknown")
     enrollment_count: Mapped[int] = mapped_column(Integer, default=0)

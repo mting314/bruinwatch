@@ -44,6 +44,29 @@ log = structlog.get_logger(__name__)
 #: Terms whose catalog we keep fresh. Everything else is read-only history.
 ACTIVE_TERM_LIMIT = 3
 
+#: Widths of the bounded string columns we write scraped text into. Exceeding
+#: one raises StringDataRightTruncation, which aborts the whole transaction --
+#: and a backfill is hours long, so one unexpected value must not kill it.
+#: A survey of real data found "4.0/6.0 Alternate" (17 chars) in a units field
+#: sized at 16; the column was widened, and this is the belt to that braces.
+_COLUMN_WIDTHS = {
+    "section_label": 32,
+    "format": 16,
+    "units": 32,
+    "title": 256,
+    "number": 16,
+    "registrar_id": 16,
+}
+
+
+def _clip(field: str, value: str) -> str:
+    """Trim a scraped string to fit its column, loudly."""
+    limit = _COLUMN_WIDTHS[field]
+    if len(value) <= limit:
+        return value
+    log.warning("value_truncated", field=field, limit=limit, value=value)
+    return value[:limit]
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SyncResult:
@@ -152,12 +175,12 @@ async def sync_courses_for_subject(
                 pg_insert(m.Course)
                 .values(
                     subject_area_id=subject_id,
-                    number=course.number,
-                    title=course.title,
+                    number=_clip("number", course.number),
+                    title=_clip("title", course.title),
                 )
                 .on_conflict_do_update(
                     constraint="uq_course",
-                    set_={"title": course.title},
+                    set_={"title": _clip("title", course.title)},
                 )
                 .returning(m.Course.id)
             )
@@ -246,14 +269,14 @@ async def save_section(
             registrar_id=section.registrar_id,
             term_id=term_id,
             course_id=course_id,
-            section_label=section.section_label,
-            format=section.format,
+            section_label=_clip("section_label", section.section_label),
+            format=_clip("format", section.format),
             index=section.index,
             days=list(section.days),
             times=list(section.times),
             locations=list(section.locations),
             instructors=list(section.instructors),
-            units=section.units,
+            units=_clip("units", section.units),
             enrollment_status=str(enrollment.enrollment_status),
             enrollment_count=enrollment.enrollment_count,
             enrollment_capacity=enrollment.enrollment_capacity,
@@ -270,14 +293,14 @@ async def save_section(
             constraint="uq_section",
             set_={
                 "course_id": course_id,
-                "section_label": section.section_label,
-                "format": section.format,
+                "section_label": _clip("section_label", section.section_label),
+                "format": _clip("format", section.format),
                 "index": section.index,
                 "days": list(section.days),
                 "times": list(section.times),
                 "locations": list(section.locations),
                 "instructors": list(section.instructors),
-                "units": section.units,
+                "units": _clip("units", section.units),
                 "enrollment_status": str(enrollment.enrollment_status),
                 "enrollment_count": enrollment.enrollment_count,
                 "enrollment_capacity": enrollment.enrollment_capacity,

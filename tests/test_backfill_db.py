@@ -74,3 +74,61 @@ async def test_progress_records_a_zero_yield_subject(sessions):
 
     async with sessions() as session:
         assert "EMPTY" in await backfill.completed_units(session, "23F")
+
+
+async def test_oversized_units_do_not_abort_the_run(sessions):
+    """Regression: a Fall 2023 backfill died on units="4.0/6.0 Alternate".
+
+    Variable-unit courses carry strings longer than the column was sized for.
+    The column is wider now, and anything still over the limit is trimmed with
+    a warning rather than raising StringDataRightTruncation -- which would roll
+    back the transaction and kill a multi-hour job over one odd row.
+    """
+    from sqlalchemy import select as _select
+
+    from bruinwatch.db import models as _m
+    from bruinwatch.registrar.types import EnrollmentNumbers, Section
+    from bruinwatch.services.sync import save_section
+
+    async with sessions() as session:
+        term = _m.Term(code="23F", name="Fall 2023", position=1, is_active=False)
+        subject = _m.SubjectArea(code="MUSC", name="Music")
+        session.add_all([term, subject])
+        await session.flush()
+        course = _m.Course(subject_area_id=subject.id, number="1", title="Applied Music")
+        session.add(course)
+        await session.commit()
+        term_id, course_id = term.id, course.id
+
+    def section_with(units: str) -> Section:
+        return Section(
+            registrar_id="505392200",
+            term_code="23F",
+            subject_area_code="MUSC",
+            course_number="1",
+            section_label="Lec 1",
+            index=1,
+            format="Lec",
+            units=units,
+            enrollment=EnrollmentNumbers(),
+        )
+
+    # The exact value that crashed the real run.
+    async with sessions() as session:
+        await save_section(
+            session, section_with("4.0/6.0 Alternate"), term_id=term_id, course_id=course_id
+        )
+        await session.commit()
+
+    async with sessions() as session:
+        stored = (await session.execute(_select(_m.Section.units))).scalar_one()
+    assert stored == "4.0/6.0 Alternate"
+
+    # And something absurd is trimmed rather than raising.
+    async with sessions() as session:
+        await save_section(session, section_with("X" * 200), term_id=term_id, course_id=course_id)
+        await session.commit()
+
+    async with sessions() as session:
+        stored = (await session.execute(_select(_m.Section.units))).scalar_one()
+    assert stored == "X" * 32

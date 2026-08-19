@@ -28,6 +28,7 @@ from ..db import models as m
 from ..db.session import transaction
 from ..registrar import RegistrarClient
 from ..registrar.scrapers import (
+    FetchFailures,
     fetch_courses_for_subject,
     fetch_sections_for_course,
     fetch_subject_areas,
@@ -128,9 +129,12 @@ async def sync_courses_for_subject(
     factory: async_sessionmaker[AsyncSession],
     subject_area_code: str,
     term_code: str,
+    failures: FetchFailures | None = None,
 ) -> int:
     """Upsert a subject's course list and its offerings for the term."""
-    courses = await fetch_courses_for_subject(client, subject_area_code, term_code)
+    courses = await fetch_courses_for_subject(
+        client, subject_area_code, term_code, failures=failures
+    )
     if not courses:
         return 0
 
@@ -185,13 +189,14 @@ async def sync_course_sections(
     term_code: str,
     *,
     record_history: bool = True,
+    failures: FetchFailures | None = None,
 ) -> SyncResult:
     """Fetch and persist every section of one course.
 
     The course row is created if we have not catalogued it yet, so ``/search``
     works on a cold start instead of waiting for the nightly catalog job.
     """
-    sections = await fetch_sections_for_course(client, course, term_code)
+    sections = await fetch_sections_for_course(client, course, term_code, failures=failures)
     if not sections:
         return SyncResult()
 

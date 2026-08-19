@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ..db import models as m
 from ..db.session import transaction
 from ..registrar import RegistrarClient
+from ..registrar.scrapers import FetchFailures
 from ..registrar.types import SEASON_ORDER, Term, calendar_year, term_position
 from .sync import sync_courses_for_subject, sync_subject_areas
 
@@ -75,7 +76,12 @@ class BackfillResult:
     subjects: int = 0
     courses: int = 0
     sections: int = 0
+    #: Subject-units already recorded by a previous run.
     skipped: int = 0
+    #: Requests abandoned after retries. Non-zero means the run has holes and
+    #: should be re-run -- resume will only redo the incomplete units, so this
+    #: is cheap to correct but must not pass unnoticed.
+    failed_requests: int = 0
 
     def __add__(self, other: BackfillResult) -> BackfillResult:
         return BackfillResult(
@@ -84,6 +90,7 @@ class BackfillResult:
             self.courses + other.courses,
             self.sections + other.sections,
             self.skipped + other.skipped,
+            self.failed_requests + other.failed_requests,
         )
 
 
@@ -144,8 +151,19 @@ async def backfill_term(
             result = result + BackfillResult(skipped=1)
             continue
 
-        courses = await sync_courses_for_subject(client, factory, code, term_code)
-        sections = await _backfill_sections(client, factory, code, term_code)
+        failures = FetchFailures()
+        courses = await sync_courses_for_subject(
+            client, factory, code, term_code, failures=failures
+        )
+        sections = await _backfill_sections(client, factory, code, term_code, failures)
+
+        if failures:
+            log.warning(
+                "subject_had_failures",
+                term=term_code,
+                subject=code,
+                detail=failures.summary(),
+            )
 
         async with transaction(factory) as session:
             await session.execute(
@@ -162,7 +180,9 @@ async def backfill_term(
                 )
             )
 
-        result = result + BackfillResult(subjects=1, courses=courses, sections=sections)
+        result = result + BackfillResult(
+            subjects=1, courses=courses, sections=sections, failed_requests=failures.total
+        )
         if on_progress is not None:
             await on_progress(term_code, code, sections)
 
@@ -173,6 +193,7 @@ async def backfill_term(
         courses=result.courses,
         sections=result.sections,
         skipped=result.skipped,
+        failed_requests=result.failed_requests,
     )
     return result
 
@@ -182,6 +203,7 @@ async def _backfill_sections(
     factory: async_sessionmaker[AsyncSession],
     subject_area_code: str,
     term_code: str,
+    failures: FetchFailures | None = None,
 ) -> int:
     """Fetch sections for every course this subject offers in the term."""
     from ..registrar.types import Course as CourseDTO
@@ -208,6 +230,7 @@ async def _backfill_sections(
             # One frozen snapshot per section is worth recording -- it is the
             # end state of that term -- but there is no series to build.
             record_history=True,
+            failures=failures,
         )
         total += outcome.sections_seen
     return total

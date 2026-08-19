@@ -24,6 +24,43 @@ from .types import Course, Section, SubjectArea, Term
 
 log = structlog.get_logger(__name__)
 
+
+class FetchFailures:
+    """Counts requests a caller chose to skip rather than abort on.
+
+    The scrapers swallow per-course failures so one bad course cannot kill a
+    sweep. For a multi-hour backfill that is dangerous on its own: a run that
+    was throttled halfway through would otherwise report success while missing
+    thousands of courses. Pass one of these in to find out.
+    """
+
+    __slots__ = ("courses", "pages", "reasons")
+
+    def __init__(self) -> None:
+        self.courses = 0
+        self.pages = 0
+        self.reasons: dict[str, int] = {}
+
+    def record(self, kind: str, error: Exception) -> None:
+        if kind == "course":
+            self.courses += 1
+        else:
+            self.pages += 1
+        name = type(error).__name__
+        self.reasons[name] = self.reasons.get(name, 0) + 1
+
+    @property
+    def total(self) -> int:
+        return self.courses + self.pages
+
+    def __bool__(self) -> bool:
+        return self.total > 0
+
+    def summary(self) -> str:
+        parts = ", ".join(f"{n}x {k}" for k, n in sorted(self.reasons.items()))
+        return f"{self.courses} courses and {self.pages} catalog pages skipped ({parts})"
+
+
 #: Guard against a pagination bug turning into an unbounded request loop.
 MAX_COURSE_PAGES = 40
 
@@ -46,7 +83,10 @@ async def fetch_subject_areas(client: RegistrarClient, term: str) -> list[Subjec
 
 
 async def fetch_courses_for_subject(
-    client: RegistrarClient, subject_area_code: str, term: str
+    client: RegistrarClient,
+    subject_area_code: str,
+    term: str,
+    failures: FetchFailures | None = None,
 ) -> list[Course]:
     """Page through a subject area's course list.
 
@@ -62,6 +102,8 @@ async def fetch_courses_for_subject(
             markup = await client.get_course_titles(model, page)
         except RegistrarError as exc:
             log.warning("course_page_failed", subject=subject_area_code, page=page, error=str(exc))
+            if failures is not None:
+                failures.record("page", exc)
             break
         if not has_more_pages(markup):
             break
@@ -90,6 +132,7 @@ async def fetch_sections_for_course(
     term: str,
     *,
     with_details: bool = False,
+    failures: FetchFailures | None = None,
 ) -> list[Section]:
     """Fetch every section of a course, across all of its listing indices."""
     sections: list[Section] = []
@@ -99,6 +142,8 @@ async def fetch_sections_for_course(
             markup = await client.get_course_summary(model)
         except RegistrarError as exc:
             log.warning("section_fetch_failed", course=course.short_title, error=str(exc))
+            if failures is not None:
+                failures.record("course", exc)
             continue
         sections.extend(parse_course_summary(markup, term, course.subject_area_code, course.number))
 

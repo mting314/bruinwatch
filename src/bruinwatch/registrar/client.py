@@ -10,9 +10,10 @@ event loop and scaled request volume with the number of subscribers.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import urllib.parse
 from types import TracebackType
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 import httpx
 import structlog
@@ -25,16 +26,57 @@ from tenacity import (
 
 from .model import FILTER_FLAGS
 
+if TYPE_CHECKING:
+    from tenacity import RetryCallState
+
 log = structlog.get_logger(__name__)
 
 #: The registrar's AJAX endpoints 404 without this header.
 AJAX_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 
-RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError)
-
 
 class RegistrarError(RuntimeError):
     """A request to the registrar failed after exhausting retries."""
+
+
+class RegistrarRateLimited(RegistrarError):
+    """The registrar asked us to slow down (429, or 503 with Retry-After).
+
+    Retryable, unlike other 4xx: it says "not now", not "never".
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+#: Failures worth trying again: the network wobbled, the server is unwell, or
+#: it explicitly asked us to wait. Other 4xx mean the request itself is wrong.
+RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError, RegistrarRateLimited)
+
+#: Ceiling on an honoured Retry-After, so a hostile or mistaken header cannot
+#: park the scraper for hours.
+MAX_RETRY_AFTER = 300.0
+
+#: Slowest we will ever go after being throttled: one request every 2s.
+MIN_RATE_INTERVAL_CEILING = 2.0
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Read a ``Retry-After`` header. Seconds, or an HTTP date."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value.strip()))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        delta = parsedate_to_datetime(value) - dt.datetime.now(dt.UTC)
+        return max(0.0, delta.total_seconds())
+    except (TypeError, ValueError):
+        return None
 
 
 class RegistrarClient:
@@ -90,6 +132,31 @@ class RegistrarClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def _wait(self, retry_state: RetryCallState) -> float:
+        """Backoff schedule: the server's Retry-After if it gave one, else
+        exponential with jitter."""
+        exc = retry_state.outcome.exception() if retry_state.outcome else None
+        if isinstance(exc, RegistrarRateLimited) and exc.retry_after is not None:
+            return min(exc.retry_after, MAX_RETRY_AFTER)
+        return float(wait_exponential_jitter(initial=self._retry_initial_wait, max=30)(retry_state))
+
+    def _throttle_harder(self) -> None:
+        """Halve our request rate after being told to slow down.
+
+        Deliberately one-way for the life of the client: a long batch finishing
+        slower is strictly better than one that gets blocked. If no rate limit
+        was configured, start from one request per second rather than
+        continuing unbounded.
+        """
+        previous = self._min_interval
+        self._min_interval = min(max(self._min_interval * 2, 1.0), MIN_RATE_INTERVAL_CEILING)
+        if self._min_interval != previous:
+            log.warning(
+                "rate_limited_backing_off",
+                previous_interval_s=round(previous, 3),
+                new_interval_s=round(self._min_interval, 3),
+            )
+
     async def _await_rate_slot(self) -> None:
         """Block until this request is allowed to start.
 
@@ -126,7 +193,7 @@ class RegistrarClient:
 
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(self._max_retries + 1),
-            wait=wait_exponential_jitter(initial=self._retry_initial_wait, max=30),
+            wait=self._wait,
             retry=retry_if_exception_type(RETRYABLE),
             reraise=True,
         ):
@@ -138,9 +205,22 @@ class RegistrarClient:
                         params=params if raw_query is None else None,
                         headers=headers,
                     )
-                # 4xx are permanent (bad model, unknown course); do not retry.
+                retry_after = parse_retry_after(response.headers.get("Retry-After"))
+
+                # "Slow down" is not "never": retryable, and it permanently
+                # eases this client's rate for the rest of the run.
+                if response.status_code in (429, 408):
+                    self._throttle_harder()
+                    raise RegistrarRateLimited(
+                        f"{response.status_code} from {response.url}", retry_after
+                    )
                 if response.status_code >= 500:
+                    if retry_after is not None:
+                        raise RegistrarRateLimited(
+                            f"{response.status_code} from {response.url}", retry_after
+                        )
                     response.raise_for_status()
+                # Other 4xx are permanent (bad model, unknown course).
                 if response.status_code >= 400:
                     raise RegistrarError(f"{response.status_code} from {response.url}")
                 return response.text

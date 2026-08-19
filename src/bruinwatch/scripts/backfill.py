@@ -72,13 +72,19 @@ async def run(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     done_units = 0
+    # Only an order-of-magnitude guide: subjects vary hugely in size, and
+    # resumed units complete instantly.
+    total_units = len(terms) * 168
 
     async def on_progress(term: str, subject: str, sections: int) -> None:
         nonlocal done_units
         done_units += 1
         elapsed = time.monotonic() - started
+        rate = done_units / elapsed if elapsed else 0
+        remaining = (total_units - done_units) / rate / 60 if rate else 0
         print(
-            f"  [{elapsed / 60:6.1f}m] {term} {subject:<10} {sections:5d} sections",
+            f"  [{elapsed / 60:6.1f}m] {term} {subject:<10} {sections:5d} sections"
+            f"   ~{remaining:.0f}m left",
             flush=True,
         )
         if stopping.is_set():
@@ -105,6 +111,15 @@ async def run(args: argparse.Namespace) -> int:
         f"\nDone in {minutes:.1f} min: {result.terms} terms, {result.courses:,} courses, "
         f"{result.sections:,} sections ({result.skipped:,} subject-units already done)."
     )
+    if result.failed_requests:
+        # Never let a throttled or flaky run look like a clean one.
+        print(
+            f"\nWARNING: {result.failed_requests:,} requests were abandoned after retries, "
+            f"so this run has holes.\nRe-run the same command -- resume skips the units that "
+            f"completed, so it will be quick.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

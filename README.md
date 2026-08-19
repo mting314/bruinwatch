@@ -137,6 +137,22 @@ Measured costs (probed against the live registrar, not estimated):
 historical sections come back with capacity `0` — some departments close their
 sections by department at term end — so demand ratios exclude them.
 
+What the scraper does when things go wrong:
+
+- **Exponential backoff with jitter** (1s → 30s, 3 retries) on timeouts,
+  connection errors and 5xx.
+- **`429` and `408` are retried, not treated as permanent** — and being
+  throttled once permanently halves this run's request rate, down to a floor of
+  one request every 2s. A batch job finishing slower beats one getting blocked.
+- **`Retry-After` is honoured** on 429 and 5xx, capped at 5 minutes so a bad
+  header can't park the run for hours.
+- **Other 4xx are permanent** and don't burn retries — an unknown course is
+  unknown however many times you ask.
+- **Skipped work is counted and reported.** Per-course failures are swallowed so
+  one bad course can't kill a sweep, but the run exits non-zero and tells you
+  how much it missed. A throttled run must never look like a clean one.
+- **Resume** means correcting a holed run is cheap: re-run the same command.
+
 ---
 
 ## The stats site

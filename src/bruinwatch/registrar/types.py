@@ -13,6 +13,43 @@ from enum import StrEnum
 
 TERM_RE = re.compile(r"^\d{2}([FWS]|[12])$")
 
+#: Order of terms inside one calendar year. Term codes cannot be sorted as
+#: strings -- alphabetically ``F < S < W``, but the year runs Winter, Spring,
+#: the two Summer sessions, then Fall.
+SEASON_ORDER = {"W": 0, "S": 1, "1": 2, "2": 3, "F": 4}
+
+#: Arbitrary base larger than any real key, so newer terms get a smaller
+#: ``position``. Keeps computed positions positive and comparable forever.
+_POSITION_BASE = 100_000
+
+
+#: Two-digit years at or above this belong to the 1900s. The registrar's
+#: archive starts at 99F (Fall 1999), so the pivot only has to separate the
+#: tail of the last century from this one.
+_CENTURY_PIVOT = 90
+
+
+def calendar_year(code: str) -> int:
+    """Full year for a term code: ``26F`` -> 2026, ``99F`` -> 1999."""
+    two_digit = int(code[:2])
+    return (1900 if two_digit >= _CENTURY_PIVOT else 2000) + two_digit
+
+
+def chronological_key(code: str) -> int:
+    """A sortable integer for a term code. Larger means later in time."""
+    return calendar_year(code) * 10 + SEASON_ORDER[code[-1]]
+
+
+def term_position(code: str) -> int:
+    """Sort position for a term: smaller is newer.
+
+    Computed from the code rather than taken from the registrar's dropdown, so
+    that backfilled terms -- which the dropdown never lists -- interleave
+    correctly with live ones. The dropdown happens to be in exactly this order,
+    which ``tests/test_parsing.py`` asserts.
+    """
+    return _POSITION_BASE - chronological_key(code)
+
 
 class EnrollmentStatus(StrEnum):
     """Normalized enrollment status.
@@ -64,7 +101,7 @@ class Term:
 
     @property
     def year(self) -> int:
-        return 2000 + int(self.code[:2])
+        return calendar_year(self.code)
 
 
 @dataclass(frozen=True, slots=True)

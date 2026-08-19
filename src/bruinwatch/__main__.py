@@ -17,10 +17,19 @@ from .config import Settings
 
 async def main() -> int:
     try:
-        settings = Settings()  # type: ignore[call-arg]  # pydantic reads the env
+        settings = Settings()
     except Exception as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         print("Copy .env.example to .env and fill it in.", file=sys.stderr)
+        return 2
+
+    if settings.discord_token is None:
+        print(
+            "BRUINWATCH_DISCORD_TOKEN is not set. Copy .env.example to .env and "
+            "fill it in.\n(The scraper commands -- bruinwatch-backfill, "
+            "bruinwatch-demo -- do not need one.)",
+            file=sys.stderr,
+        )
         return 2
 
     log_setup.configure(settings.log_level, json_output=settings.log_json)

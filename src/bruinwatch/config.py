@@ -14,7 +14,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    discord_token: SecretStr
+    #: Optional at this level so the scraper CLIs -- which never talk to
+    #: Discord -- can load settings without one. `bruinwatch` itself checks for
+    #: it at startup and exits with a clear message if it is missing.
+    discord_token: SecretStr | None = None
     owner_id: int | None = None
     #: Sync slash commands to one guild for instant availability during
     #: development; global command propagation otherwise takes about an hour.

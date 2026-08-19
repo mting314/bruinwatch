@@ -229,6 +229,24 @@ class NotificationOutbox(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class BackfillProgress(Base):
+    """One completed (term, subject) unit of a historical backfill.
+
+    A full backfill is hours of polite scraping and will be interrupted, so
+    progress is recorded explicitly rather than inferred from whether rows
+    happen to exist -- a subject can legitimately yield zero courses, and that
+    is a completed unit, not a missing one.
+    """
+
+    __tablename__ = "backfill_progress"
+
+    term_code: Mapped[str] = mapped_column(String(8), primary_key=True)
+    subject_area_code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    courses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sections: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completed_at: Mapped[dt.datetime] = _now()
+
+
 class EnrollmentAppointment(Base):
     """A registrar enrollment pass window.
 

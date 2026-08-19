@@ -99,6 +99,46 @@ fail loudly instead of every scrape silently returning nothing.
 
 ---
 
+## Backfilling past terms
+
+The registrar serves any term code you ask for, back to **Fall 1999** — far
+beyond the eight terms its dropdown advertises. `bruinwatch-backfill` walks
+those terms and records what was offered, by whom, at what capacity, and how
+full each section ended up:
+
+```bash
+uv run bruinwatch-backfill --from 23W --to 27S --dry-run   # print the plan
+uv run bruinwatch-backfill --from 23W --to 27S             # ~13 h at 5 req/s
+```
+
+Resumable — each (term, subject) unit is recorded on completion, so an
+interrupted run picks up where it stopped and re-running is safe.
+
+**It cannot recover enrollment history.** The archive holds a single frozen
+snapshot per section, not a time series. Fill curves, time-to-full and anything
+about *how* demand built exist only for terms the live scraper watched. A
+backfill is a different dataset from the hourly sweep, not an extension of it.
+
+Measured costs (probed against the live registrar, not estimated):
+
+| | |
+|---|---|
+| Terms available | 99F → present, ~135 terms |
+| Subjects per term | 168 |
+| Courses per subject | ~62 |
+| Requests per term | ~11,000 |
+| Median latency / payload | 21 ms / 10.8 KB |
+| 2023 → present (22 terms) | ~242k requests, ~13 h at 5/s, ~2.5 GB |
+| Whole archive (135 terms) | ~1.5M requests, ~3.5 days at 5/s, ~16 GB |
+| Storage for the whole archive | ~5 GB Postgres |
+
+`--rate` is a politeness budget, not a throughput knob. The registrar answers in
+21 ms and would let you finish the whole archive in an hour; don't. About 10% of
+historical sections come back with capacity `0` — some departments close their
+sections by department at term end — so demand ratios exclude them.
+
+---
+
 ## The stats site
 
 The bot serves a read-only web UI from the same process, on

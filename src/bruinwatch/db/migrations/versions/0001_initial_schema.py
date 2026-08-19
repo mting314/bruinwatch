@@ -210,6 +210,17 @@ def upgrade() -> None:
     )
 
     op.create_table(
+        "backfill_progress",
+        sa.Column("term_code", sa.String(8), primary_key=True),
+        sa.Column("subject_area_code", sa.String(16), primary_key=True),
+        sa.Column("courses", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("sections", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column(
+            "completed_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+    )
+
+    op.create_table(
         "enrollment_appointments",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("term_id", sa.Integer(), sa.ForeignKey("terms.id"), nullable=False),
@@ -224,6 +235,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     for table in (
         "enrollment_appointments",
+        "backfill_progress",
         "notification_outbox",
         "aliases",
         "subscriptions",

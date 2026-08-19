@@ -25,6 +25,7 @@ from .types import (
     SubjectArea,
     Term,
     WaitlistStatus,
+    term_position,
 )
 
 # --------------------------------------------------------------------------
@@ -350,8 +351,10 @@ def parse_terms(markup: str) -> list[Term]:
     * **Order.** The registrar lists terms reverse-chronologically
       (``27S 27W 26F 262 261 26S ...``). Term codes do *not* sort that way as
       strings -- within a year the suffixes run Winter, Spring, Fall but sort
-      ``F < S < W`` -- so the position in this list is the only reliable
-      ordering, and it is recorded as :attr:`Term.position`.
+      ``F < S < W``. :attr:`Term.position` is computed from the code by
+      :func:`~bruinwatch.registrar.types.term_position`, which reproduces the
+      dropdown's order while also placing backfilled terms the dropdown never
+      lists.
     * **Which term is current.** The registrar marks it ``selected``. Guessing
       it from the codes gets it wrong.
     """
@@ -367,7 +370,7 @@ def parse_terms(markup: str) -> list[Term]:
                 Term(
                     code=code,
                     name=_squash(str(name)),
-                    position=len(terms),
+                    position=term_position(code),
                     is_current=option.has_attr("selected"),
                 )
             )

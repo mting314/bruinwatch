@@ -26,6 +26,8 @@ bruinwatch = "bruinwatch.__main__:run"
 # Serves the stats site against synthetic data, for development. Needs no
 # token, no Postgres and no scraped history.
 bruinwatch-demo = "bruinwatch.scripts.demo:main"
+# Walks past terms and records their catalogs. Resumable; rate-limited.
+bruinwatch-backfill = "bruinwatch.scripts.backfill:main"
 
 [dependency-groups]
 dev = [

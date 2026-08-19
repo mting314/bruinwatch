@@ -254,20 +254,50 @@ def test_non_summer_sections_have_no_session(fixture_text):
     assert section.summer_duration_weeks is None
 
 
-def test_parse_terms_preserves_registrar_ordering(fixture_text):
-    """Regression: term codes cannot be sorted chronologically as strings.
+def test_computed_position_reproduces_the_registrar_dropdown_order(fixture_text):
+    """``position`` is derived from the code, not from the dropdown index.
 
-    Alphabetically ``26F < 26S < 26W``, but the year runs Winter, Spring, Fall.
-    The registrar's dropdown order is the only reliable one, so it is recorded
-    as ``position`` and must never be recomputed from the code.
+    That is only safe because the registrar lists terms reverse-
+    chronologically, which this asserts against the real dropdown. Deriving it
+    lets backfilled terms -- never listed in the dropdown -- interleave with
+    live ones.
     """
     terms = parse_terms(fixture_text("term_select.html"))
-    codes = [t.code for t in terms]
+    positions = [t.position for t in terms]
 
-    assert [t.position for t in terms] == list(range(len(terms)))
-    assert codes == sorted(codes, key=lambda c: [t.code for t in terms].index(c))
-    # The sorted-by-code order is genuinely different -- that is the bug.
-    assert codes != sorted(codes, reverse=True)
+    assert positions == sorted(positions), "computed order differs from the dropdown"
+    assert len(set(positions)) == len(positions), "two terms share a position"
+    # Sorting by code instead would be wrong, which is the bug this guards.
+    assert [t.code for t in terms] != sorted((t.code for t in terms), reverse=True)
+
+
+def test_backfilled_terms_interleave_with_live_ones():
+    """A historical term must sort into the right place among live terms."""
+    from bruinwatch.registrar.types import term_position
+
+    codes = ["27S", "26F", "262", "261", "26S", "25F", "24F", "23F", "23W"]
+    assert sorted(codes, key=term_position) == [
+        "27S",
+        "26F",
+        "262",
+        "261",
+        "26S",
+        "25F",
+        "24F",
+        "23F",
+        "23W",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("earlier", "later"),
+    [("26W", "26S"), ("26S", "261"), ("261", "262"), ("262", "26F"), ("26F", "27W")],
+)
+def test_season_order_within_a_year(earlier, later):
+    """Winter, Spring, Summer 1, Summer 2, Fall -- not alphabetical."""
+    from bruinwatch.registrar.types import term_position
+
+    assert term_position(earlier) > term_position(later)
 
 
 def test_parse_terms_marks_the_registrar_selected_term(fixture_text):

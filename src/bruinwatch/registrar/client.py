@@ -51,11 +51,19 @@ class RegistrarClient:
         timeout: float = 20.0,
         max_retries: int = 3,
         retry_initial_wait: float = 1.0,
+        requests_per_second: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._max_retries = max_retries
         self._retry_initial_wait = retry_initial_wait
+        # A hard ceiling on request rate, independent of concurrency. The
+        # semaphore bounds how many requests are in flight; this bounds how
+        # often they start, which is what politeness actually means for a
+        # long-running backfill against someone else's server.
+        self._min_interval = 1.0 / requests_per_second if requests_per_second else 0.0
+        self._rate_lock = asyncio.Lock()
+        self._next_slot = 0.0
         self._client = httpx.AsyncClient(
             http2=True,
             timeout=httpx.Timeout(timeout),
@@ -82,6 +90,24 @@ class RegistrarClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def _await_rate_slot(self) -> None:
+        """Block until this request is allowed to start.
+
+        Hands out evenly spaced departure slots, so N concurrent callers still
+        produce at most ``requests_per_second`` in aggregate rather than N
+        bursts. No-op when no rate limit was configured.
+        """
+        if not self._min_interval:
+            return
+        loop = asyncio.get_running_loop()
+        async with self._rate_lock:
+            now = loop.time()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + self._min_interval
+        delay = slot - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     async def get(
         self,
         url: str,
@@ -105,6 +131,7 @@ class RegistrarClient:
             reraise=True,
         ):
             with attempt:
+                await self._await_rate_slot()
                 async with self._semaphore:
                     response = await self._client.get(
                         target,

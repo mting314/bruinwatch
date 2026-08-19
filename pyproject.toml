@@ -29,6 +29,7 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
+    "pytest-aiohttp>=1.0",
     "ruff>=0.5",
     "mypy>=1.10",
     # PGlite: PostgreSQL as WebAssembly, run in-process. Lets the DB-backed

@@ -23,7 +23,7 @@ have been removed; what's left is the class tracker, rebuilt.
 | `/notify subject number spots` | Also ping when an open section drops to N spots or fewer. |
 | `/alias set\|remove\|list` | Shorthands for awkward subject codes — `CS` → `COM SCI`. |
 | `/about` | What the bot does. |
-| `/admin stats\|sync\|scraper\|resync-commands` | Owner-only. |
+| `/admin …` | Owner-only: `stats`, `sync`, `scraper`, `enrollment-window`, `resync-commands`. |
 
 You'll get a DM when a watched section's status changes — `Full → Open`,
 `Open → Waitlist`, and so on — and, if you set one, when it crosses your
@@ -99,6 +99,44 @@ fail loudly instead of every scrape silently returning nothing.
 
 ---
 
+## The stats site
+
+The bot serves a read-only web UI from the same process, on
+`BRUINWATCH_HEALTHCHECK_PORT` (8080 by default):
+
+| Route | |
+|---|---|
+| `/stats` | Term overview — how much of the catalog is closed, most in-demand courses, hardest subjects, fastest-filling sections |
+| `/stats/courses` | Every course with recorded history |
+| `/stats/course/{subject}/{number}` | Enrollment-over-time curves per section, plus term-over-term peaks |
+| `/api/stats/summary` | The same numbers as JSON |
+| `/api/stats/course/{subject}/{number}` | Full history for one course as JSON |
+| `/healthz` | Gateway and scraper state |
+
+The headline measures:
+
+- **Demand ratio** — enrolled plus waitlisted, over capacity, aggregated across
+  a course's sections. Above 1.0× means more students want in than the room holds.
+- **Subject pressure** — the share of a subject's sections that are full,
+  waitlisted or closed.
+- **Time to fill** — how long a section took to close. Measured from *this bot's
+  first observation*, not from when the registrar opened enrollment, because we
+  cannot know the latter for a section we met mid-term. The UI says so wherever
+  the number appears.
+- **Term over term** — a course's peak fill in each term. Needs two terms of
+  collected history before it says anything.
+
+**It starts empty.** `enrollment_data` only fills as the scraper runs; expect a
+thin page for the first day and a genuinely useful one after a term. Every page
+says what it is waiting for rather than rendering a blank chart.
+
+Charts are server-rendered inline SVG — no CDN, no build step, no client-side
+fetch — against a palette validated for colour-vision deficiency in both light
+and dark mode. Every chart ships a table view beside it, and lines carry direct
+end labels, so no value is ever reachable by colour alone.
+
+---
+
 ## Running it
 
 Needs a Discord bot token and PostgreSQL. No privileged gateway intents:
@@ -112,7 +150,7 @@ docker compose up --build
 ```
 
 Compose brings up Postgres, runs `alembic upgrade head`, then starts the bot.
-A health endpoint reporting gateway and scraper state is on
+The stats site is on <http://localhost:8080/stats> and the health endpoint on
 <http://localhost:8080/healthz>.
 
 ### Locally
@@ -199,6 +237,8 @@ src/bruinwatch/
   registrar/   pure UCLA layer: model building, HTTP client, parsers. No DB, no Discord.
   db/          SQLAlchemy models, queries, Alembic migrations.
   services/    change detection, scheduling, notification delivery.
+  analytics.py the stats queries. Returns dataclasses; renders nothing.
+  web/         the stats site: inline-SVG charts, page shell, routes.
   cogs/        slash commands.
   ui/          embeds and interactive components.
 ```

@@ -45,6 +45,7 @@ async def stats_overview(request: web.Request) -> web.Response:
                 text=render.page(
                     "Stats",
                     render.notice("No terms loaded yet — the bot has not run a sync."),
+                    demo=_demo(request),
                 ),
                 content_type="text/html",
             )
@@ -104,6 +105,7 @@ async def stats_overview(request: web.Request) -> web.Response:
             "Stats",
             "".join(body),
             subtitle=f"Enrollment analytics for {term}.",
+            demo=_demo(request),
         ),
         content_type="text/html",
     )
@@ -257,7 +259,11 @@ async def course_index(request: web.Request) -> web.Response:
         term = request.query.get("term") or await repo.default_term_code(session)
         if term is None:
             return web.Response(
-                text=render.page("Courses", render.notice("No terms loaded yet.")),
+                text=render.page(
+                    "Courses",
+                    render.notice("No terms loaded yet."),
+                    demo=_demo(request),
+                ),
                 content_type="text/html",
             )
         courses = await analytics.tracked_courses(session, term)
@@ -284,7 +290,9 @@ async def course_index(request: web.Request) -> web.Response:
         )
 
     return web.Response(
-        text=render.page("Courses", body, subtitle=f"Tracked courses in {term}."),
+        text=render.page(
+            "Courses", body, subtitle=f"Tracked courses in {term}.", demo=_demo(request)
+        ),
         content_type="text/html",
     )
 
@@ -313,6 +321,7 @@ async def course_detail(request: web.Request) -> web.Response:
             f"{subject} {number}",
             "".join(body),
             subtitle=f"{subject} {number} — enrollment over time in {term}.",
+            demo=_demo(request),
         ),
         content_type="text/html",
     )
@@ -489,9 +498,23 @@ async def api_course(request: web.Request) -> web.Response:
 # --------------------------------------------------------------------------
 
 
-def add_routes(app: web.Application, sessions: async_sessionmaker[AsyncSession]) -> None:
-    """Mount the stats site onto an existing aiohttp app."""
+def _demo(request: web.Request) -> bool:
+    """Whether this app is serving synthetic data."""
+    return bool(request.app.get("demo"))
+
+
+def add_routes(
+    app: web.Application,
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    demo: bool = False,
+) -> None:
+    """Mount the stats site onto an existing aiohttp app.
+
+    ``demo`` marks every page with a banner saying the data is synthetic.
+    """
     app["sessions"] = sessions
+    app["demo"] = demo
     app.router.add_get("/stats", stats_overview)
     app.router.add_get("/stats/courses", course_index)
     app.router.add_get("/stats/course/{subject}/{number}", course_detail)

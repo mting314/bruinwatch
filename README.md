@@ -163,6 +163,22 @@ uv run alembic upgrade head
 uv run python -m bruinwatch
 ```
 
+### Just the stats site, with no bot and no data
+
+```bash
+uv run bruinwatch-demo          # http://127.0.0.1:8099/stats
+```
+
+Seeds synthetic sections and fill curves into an in-process PGlite and serves
+the site against them — no Discord token, no Postgres, no scraped history.
+Useful because real history takes a term to accumulate.
+
+**Every page it serves carries a DEMO DATA banner.** The instructor names are
+placeholders (`Instructor A.`) rather than real faculty, so a demo screenshot
+can't be mistaken for a claim about a real person. Pass `--database-url` to seed
+a real Postgres instead — it drops and recreates the schema, so point it
+somewhere disposable.
+
 Set `BRUINWATCH_DEV_GUILD_ID` to sync slash commands to one guild instantly;
 global commands take about an hour to propagate.
 

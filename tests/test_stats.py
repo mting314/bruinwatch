@@ -347,3 +347,38 @@ async def test_scraped_titles_cannot_inject_markup(sessions, aiohttp_client, see
     assert "<img" not in html
     assert '"alert(1)"' not in html
     assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
+
+
+# -- demo mode -------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def demo_client(sessions, aiohttp_client):
+    app = web.Application()
+    add_routes(app, sessions, demo=True)
+    return await aiohttp_client(app)
+
+
+async def test_demo_mode_banners_every_page(demo_client, seeded):
+    """Synthetic data must never render as though it were real."""
+    for url in ("/stats", "/stats/courses", "/stats/course/COM%20SCI/32?term=26F"):
+        html = await (await demo_client.get(url)).text()
+        assert "DEMO DATA" in html, f"{url} is missing the demo banner"
+        assert "<title>[DEMO]" in html
+
+
+async def test_real_mode_has_no_banner(client, seeded):
+    html = await (await client.get("/stats")).text()
+    assert "DEMO DATA" not in html
+    assert "<title>[DEMO]" not in html
+    # The .demo-banner CSS rule ships on every page; what must be absent is the
+    # element itself.
+    assert '<div class="demo-banner"' not in html
+
+
+def test_demo_instructors_are_not_real_people():
+    """A demo screenshot must not appear to claim a named professor teaches a
+    course they do not."""
+    from bruinwatch.scripts.demo import INSTRUCTORS
+
+    assert all(name.startswith("Instructor ") for name in INSTRUCTORS)

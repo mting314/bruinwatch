@@ -160,6 +160,19 @@ details.table-view > div { margin-top: 12px; }
 .status.serious .dot { background: var(--serious); }
 .status.neutral .dot { background: var(--text-muted); }
 
+/* Demo banner. Deliberately loud and un-dismissable: a page of synthetic
+   numbers that looks like a real one is worse than no page at all. */
+.demo-banner {
+  background: var(--warning);
+  color: #0b0b0b;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 10px 20px;
+  margin: -32px -20px 24px;
+  text-align: center;
+}
+.demo-banner span { font-weight: 400; }
+
 .empty { color: var(--text-secondary); font-size: 14px; margin: 4px 0; }
 .notice {
   background: var(--surface-1); border: 1px solid var(--border);
@@ -173,16 +186,31 @@ footer.site a { color: var(--text-muted); }
 """
 
 
-def page(title: str, body: str, *, subtitle: str = "") -> str:
-    """Wrap page content in the site shell."""
+DEMO_BANNER = (
+    '<div class="demo-banner">DEMO DATA — none of this is real. '
+    "<span>Synthetic sections, enrollment curves and instructor names, "
+    "generated for local development. Nothing here came from the UCLA "
+    "registrar.</span></div>"
+)
+
+
+def page(title: str, body: str, *, subtitle: str = "", demo: bool = False) -> str:
+    """Wrap page content in the site shell.
+
+    ``demo`` prints an un-dismissable banner. A page of synthetic numbers that
+    looks identical to a real one is worse than no page: it invites exactly the
+    "wait, why is that professor teaching econ?" confusion.
+    """
     sub = f'<p class="subtitle">{esc(subtitle)}</p>' if subtitle else ""
+    banner = DEMO_BANNER if demo else ""
     return (
         '<!doctype html><html lang="en"><head>'
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{esc(title)} · BruinWatch</title>"
+        f"<title>{'[DEMO] ' if demo else ''}{esc(title)} · BruinWatch</title>"
         f"<style>{STYLE}</style>"
         '</head><body><div class="wrap">'
+        f"{banner}"
         '<header class="site"><h1>BruinWatch</h1>'
         '<nav><a href="/stats">Overview</a>'
         '<a href="/stats/courses">Courses</a>'

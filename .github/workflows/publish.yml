@@ -35,8 +35,13 @@ env:
   BRUINWATCH_DATABASE_URL: postgresql+asyncpg://bruinwatch:bruinwatch@localhost:5432/bruinwatch
   BRUINWATCH_DB_POOL_SIZE: "4"
   BRUINWATCH_LOG_LEVEL: INFO
-  # The registrar is a public university endpoint, not a load test.
-  SCRAPE_RATE: "5"
+  # The registrar throttles: the first scheduled run was cut off with 529 and a
+  # redirect to /Error/TooManyRequests partway through the section sweep, at
+  # 5 req/s with concurrency 10. These are deliberately timid until we know
+  # what it actually tolerates. A full sweep is ~11k requests, so 2/s is ~90
+  # minutes -- well inside the 6h job limit.
+  SCRAPE_RATE: "2"
+  SCRAPE_CONCURRENCY: "2"
   DB_RELEASE_TAG: database
 
 jobs:
@@ -83,17 +88,17 @@ jobs:
 
       - name: Bootstrap (first run only)
         if: steps.restore.outputs.restored != 'true'
-        run: uv run bruinwatch-scrape bootstrap --rate "$SCRAPE_RATE"
+        run: uv run bruinwatch-scrape bootstrap --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
 
       - name: Refresh the catalog
         # Slow (~168 subjects), so only on demand or when starting fresh.
         if: >-
           steps.restore.outputs.restored != 'true' ||
           inputs.full_catalog
-        run: uv run bruinwatch-scrape catalog --rate "$SCRAPE_RATE"
+        run: uv run bruinwatch-scrape catalog --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
 
       - name: Scrape sections
-        run: uv run bruinwatch-scrape all-sections --rate "$SCRAPE_RATE"
+        run: uv run bruinwatch-scrape all-sections --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
 
       - name: Render the static site
         run: uv run bruinwatch-render --out dist

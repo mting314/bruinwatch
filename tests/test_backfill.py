@@ -268,3 +268,95 @@ def test_backfill_result_accumulates_failures():
     b = backfill.BackfillResult(sections=4, failed_requests=5)
     assert (a + b).sections == 7
     assert (a + b).failed_requests == 7
+
+
+# -- the registrar's actual throttling signal ------------------------------
+
+
+@respx.mock
+async def test_529_is_recognised_as_throttling():
+    """sa.ucla.edu returns 529, not 429. Treating it as a generic 5xx meant
+    retrying at full speed and then killing the job -- which is exactly what
+    happened on the first scheduled run."""
+    route = respx.get(GET_COURSE_SUMMARY_URL).mock(
+        side_effect=[httpx.Response(529), httpx.Response(200, text="ok")]
+    )
+    client = RegistrarClient(
+        user_agent="t", max_retries=2, retry_initial_wait=0.001, requests_per_second=100
+    )
+    before = client._min_interval
+    async with client:
+        assert await client.get_course_summary("{}") == "ok"
+    assert route.call_count == 2
+    assert client._min_interval > before, "a 529 must also slow us down"
+
+
+@respx.mock
+async def test_redirect_to_the_error_page_counts_as_throttling():
+    """The registrar *redirects* throttled requests to /Error/TooManyRequests.
+    We follow redirects, so the landing URL is a signal in its own right even
+    if the status served there is not one we recognise."""
+    from bruinwatch.registrar.client import RegistrarRateLimited
+
+    error_url = "https://sa.ucla.edu/ro/Public/SOC/Error/TooManyRequests"
+    respx.get(GET_COURSE_SUMMARY_URL).mock(
+        return_value=httpx.Response(302, headers={"Location": error_url})
+    )
+    respx.get(error_url).mock(return_value=httpx.Response(200, text="slow down"))
+
+    client = RegistrarClient(user_agent="t", max_retries=0, retry_initial_wait=0.001)
+    async with client:
+        with pytest.raises(RegistrarRateLimited):
+            await client.get_course_summary("{}")
+
+
+@respx.mock
+async def test_sustained_throttling_aborts_rather_than_grinding_on():
+    """Without this a blocked run walks the whole catalog failing every request,
+    producing a holed dataset and a lot of pointless load on the registrar."""
+    from bruinwatch.registrar.client import BLOCKED_AFTER_CONSECUTIVE, RegistrarBlocked
+
+    respx.get(GET_COURSE_SUMMARY_URL).mock(return_value=httpx.Response(529))
+    client = RegistrarClient(user_agent="t", max_retries=0, retry_initial_wait=0.001)
+    raised = None
+    async with client:
+        for _ in range(BLOCKED_AFTER_CONSECUTIVE + 2):
+            client._min_interval = 0.0  # skip the punitive backoff in tests
+            try:
+                await client.get_course_summary("{}")
+            except RegistrarBlocked as exc:
+                raised = exc
+                break
+            except Exception:
+                continue
+    assert raised is not None, "sustained throttling should abort the run"
+
+
+@respx.mock
+async def test_a_success_resets_the_blocked_counter():
+    """Intermittent throttling must not accumulate into a false abort."""
+    from bruinwatch.registrar.client import BLOCKED_AFTER_CONSECUTIVE
+
+    rounds = BLOCKED_AFTER_CONSECUTIVE + 2  # more throttles than the abort threshold
+    responses = []
+    for _ in range(rounds):
+        responses += [httpx.Response(529), httpx.Response(200, text="ok")]
+    respx.get(GET_COURSE_SUMMARY_URL).mock(side_effect=responses)
+
+    client = RegistrarClient(
+        user_agent="t", max_retries=1, retry_initial_wait=0.001, requests_per_second=1000
+    )
+    # Being throttled floors the interval at 1s by design; override it so the
+    # test measures the counter logic rather than the backoff schedule.
+    async with client:
+        for _ in range(rounds):
+            client._min_interval = 0.0
+            assert await client.get_course_summary("{}") == "ok"
+
+
+def test_blocked_is_not_a_registrar_error():
+    """The per-course handlers swallow RegistrarError; this one must get past
+    them and stop the run."""
+    from bruinwatch.registrar.client import RegistrarBlocked, RegistrarError
+
+    assert not issubclass(RegistrarBlocked, RegistrarError)

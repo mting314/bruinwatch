@@ -1,6 +1,6 @@
 """Framework-free access to the UCLA Schedule of Classes."""
 
-from .client import RegistrarClient, RegistrarError
+from .client import RegistrarBlocked, RegistrarClient, RegistrarError, RegistrarRateLimited
 from .types import (
     Course,
     EnrollmentNumbers,
@@ -15,8 +15,10 @@ __all__ = [
     "Course",
     "EnrollmentNumbers",
     "EnrollmentStatus",
+    "RegistrarBlocked",
     "RegistrarClient",
     "RegistrarError",
+    "RegistrarRateLimited",
     "Section",
     "SubjectArea",
     "Term",

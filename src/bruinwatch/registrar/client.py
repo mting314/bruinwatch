@@ -39,6 +39,14 @@ class RegistrarError(RuntimeError):
     """A request to the registrar failed after exhausting retries."""
 
 
+class RegistrarBlocked(RuntimeError):
+    """The registrar is consistently refusing us; stop rather than continue.
+
+    Deliberately *not* a :class:`RegistrarError`, so the per-course handlers
+    that swallow individual failures let this one through and abort the run.
+    """
+
+
 class RegistrarRateLimited(RegistrarError):
     """The registrar asked us to slow down (429, or 503 with Retry-After).
 
@@ -60,6 +68,21 @@ MAX_RETRY_AFTER = 300.0
 
 #: Slowest we will ever go after being throttled: one request every 2s.
 MIN_RATE_INTERVAL_CEILING = 2.0
+
+#: Status codes that mean "you are going too fast". 429 is the standard one;
+#: **529 is what sa.ucla.edu actually returns**, along with a redirect to
+#: /Error/TooManyRequests. 529 is non-standard and would otherwise be treated
+#: as a generic server error, which retries without ever slowing down.
+THROTTLE_STATUS = frozenset({408, 429, 529})
+
+#: The registrar redirects throttled requests here, so the final URL is a
+#: signal in its own right even if the status code changes.
+THROTTLE_URL_MARKER = "/Error/TooManyRequests"
+
+#: Consecutive throttles before we conclude we are blocked and stop. Without
+#: this a rate-limited run grinds through the whole catalog failing every
+#: request, producing a holed dataset and a lot of pointless load.
+BLOCKED_AFTER_CONSECUTIVE = 8
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -106,6 +129,7 @@ class RegistrarClient:
         self._min_interval = 1.0 / requests_per_second if requests_per_second else 0.0
         self._rate_lock = asyncio.Lock()
         self._next_slot = 0.0
+        self._consecutive_throttles = 0
         self._client = httpx.AsyncClient(
             http2=True,
             timeout=httpx.Timeout(timeout),
@@ -139,6 +163,21 @@ class RegistrarClient:
         if isinstance(exc, RegistrarRateLimited) and exc.retry_after is not None:
             return min(exc.retry_after, MAX_RETRY_AFTER)
         return float(wait_exponential_jitter(initial=self._retry_initial_wait, max=30)(retry_state))
+
+    def _on_throttled(self) -> None:
+        """Slow down, and give up entirely if it keeps happening."""
+        self._consecutive_throttles += 1
+        self._throttle_harder()
+        if self._consecutive_throttles >= BLOCKED_AFTER_CONSECUTIVE:
+            log.error(
+                "registrar_blocking_us",
+                consecutive=self._consecutive_throttles,
+                interval_s=round(self._min_interval, 3),
+            )
+            raise RegistrarBlocked(
+                f"the registrar refused {self._consecutive_throttles} consecutive requests; "
+                f"stopping. Re-run later, and lower --rate."
+            )
 
     def _throttle_harder(self) -> None:
         """Halve our request rate after being told to slow down.
@@ -209,11 +248,15 @@ class RegistrarClient:
 
                 # "Slow down" is not "never": retryable, and it permanently
                 # eases this client's rate for the rest of the run.
-                if response.status_code in (429, 408):
-                    self._throttle_harder()
+                throttled = response.status_code in THROTTLE_STATUS or (
+                    THROTTLE_URL_MARKER in str(response.url)
+                )
+                if throttled:
+                    self._on_throttled()
                     raise RegistrarRateLimited(
                         f"{response.status_code} from {response.url}", retry_after
                     )
+                self._consecutive_throttles = 0
                 if response.status_code >= 500:
                     if retry_after is not None:
                         raise RegistrarRateLimited(

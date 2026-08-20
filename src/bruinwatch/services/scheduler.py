@@ -50,6 +50,16 @@ log = structlog.get_logger(__name__)
 
 CAMPUS_TZ = zoneinfo.ZoneInfo("America/Los_Angeles")
 
+
+def _subject_shard(subject_area_code: str, count: int) -> int:
+    """Stable bucket for a subject, so a given subject always lands in the
+    same shard and successive runs cover disjoint slices."""
+    import hashlib
+
+    digest = hashlib.sha256(subject_area_code.encode()).digest()
+    return digest[0] % count
+
+
 # Watched-tier cadences, fastest first.
 BURST_INTERVAL = dt.timedelta(seconds=30)
 ACTIVE_INTERVAL = dt.timedelta(minutes=2)
@@ -190,17 +200,42 @@ class ScraperService:
                 total += await sync_courses_for_subject(self.client, self.factory, code, term_code)
             log.info("catalog_synced", term=term_code, courses=total)
 
-    async def sync_all_sections_job(self) -> None:
-        """Hourly full sweep: every course in every active term."""
-        courses = await self._catalog_courses()
+    async def sync_all_sections_job(
+        self,
+        term_code: str | None = None,
+        shard: tuple[int, int] | None = None,
+    ) -> None:
+        """Sweep the catalog's sections.
+
+        Two knobs, both there because the registrar refuses large sweeps: it
+        cut us off after roughly 2,000 requests, and an unrestricted sweep of
+        three active terms is ~31,000.
+
+        ``term_code`` restricts to one term -- the current one is the only one
+        with enrollment worth tracking minute to minute. ``shard`` takes
+        ``(index, count)`` and keeps only every Nth *subject*, so successive
+        runs cover different slices and the union is complete over a day or
+        two. Sharding by subject rather than by course keeps each run's request
+        pattern spread across the catalog instead of hammering one department.
+        """
+        courses = await self._catalog_courses(term_code)
+        total = len(courses)
+        if shard is not None:
+            index, count = shard
+            courses = [
+                (t, c)
+                for t, c in courses
+                if _subject_shard(c.subject_area_code, count) == index % count
+            ]
         result = SyncResult()
-        for term_code, course in courses:
-            result = result + await sync_course_sections(
-                self.client, self.factory, course, term_code
-            )
+        for code, course in courses:
+            result = result + await sync_course_sections(self.client, self.factory, course, code)
         log.info(
-            "full_sweep_complete",
+            "sweep_complete",
+            term=term_code or "all active",
+            shard=f"{shard[0] % shard[1]}/{shard[1]}" if shard else "none",
             courses=len(courses),
+            of_total=total,
             sections=result.sections_seen,
             history=result.history_rows,
             notifications=result.notifications,
@@ -339,7 +374,7 @@ class ScraperService:
                 .all()
             )
 
-    async def _catalog_courses(self) -> list[tuple[str, CourseDTO]]:
+    async def _catalog_courses(self, term_code: str | None = None) -> list[tuple[str, CourseDTO]]:
         async with self.factory() as session:
             rows = await session.execute(
                 select(
@@ -352,18 +387,20 @@ class ScraperService:
                 .join(m.Term, m.Term.id == m.CourseTerm.term_id)
                 .join(m.Course, m.Course.id == m.CourseTerm.course_id)
                 .join(m.SubjectArea, m.SubjectArea.id == m.Course.subject_area_id)
-                .where(m.Term.is_active.is_(True))
+                .where(
+                    m.Term.is_active.is_(True) if term_code is None else m.Term.code == term_code
+                )
             )
             return [
                 (
-                    term_code,
+                    code,
                     CourseDTO(
                         subject_area_code=subject_code,
                         number=number,
                         section_indices=tuple(indices or ["%"]),
                     ),
                 )
-                for term_code, subject_code, number, indices in rows
+                for code, subject_code, number, indices in rows
             ]
 
     # -- introspection (used by /admin) -----------------------------------
@@ -384,12 +421,20 @@ class ScraperService:
 
     # -- manual triggers (used by /admin) ---------------------------------
 
-    async def run_now(self, job_id: str) -> None:
+    async def run_now(
+        self,
+        job_id: str,
+        *,
+        term_code: str | None = None,
+        shard: tuple[int, int] | None = None,
+    ) -> None:
+        if job_id == "all-sections":
+            await self.sync_all_sections_job(term_code=term_code, shard=shard)
+            return
         jobs = {
             "terms": self.sync_terms_job,
             "subject-areas": self.sync_subject_areas_job,
             "catalog": self.sync_catalog_job,
-            "all-sections": self.sync_all_sections_job,
             "watched": self.poll_watched_job,
         }
         if job_id not in jobs:

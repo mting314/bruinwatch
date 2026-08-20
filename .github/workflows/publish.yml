@@ -35,13 +35,17 @@ env:
   BRUINWATCH_DATABASE_URL: postgresql+asyncpg://bruinwatch:bruinwatch@localhost:5432/bruinwatch
   BRUINWATCH_DB_POOL_SIZE: "4"
   BRUINWATCH_LOG_LEVEL: INFO
-  # The registrar throttles: the first scheduled run was cut off with 529 and a
-  # redirect to /Error/TooManyRequests partway through the section sweep, at
-  # 5 req/s with concurrency 10. These are deliberately timid until we know
-  # what it actually tolerates. A full sweep is ~11k requests, so 2/s is ~90
-  # minutes -- well inside the 6h job limit.
+  # The registrar refuses large sweeps. Measured: it cut us off after roughly
+  # 2,000 requests, twice -- at 5 req/s with concurrency 10, and again at 2/s
+  # with concurrency 2. Rate alone was never the problem; volume was. An
+  # unrestricted sweep of three active terms is ~31,000 requests.
+  #
+  # So each run takes one twelfth of the subjects, in the current term only:
+  # under 1,500 requests, with the union complete every three days at this
+  # cadence. Raise SHARD_COUNT if we get blocked again, lower it if we do not.
   SCRAPE_RATE: "2"
   SCRAPE_CONCURRENCY: "2"
+  SHARD_COUNT: "12"
   DB_RELEASE_TAG: database
 
 jobs:
@@ -91,14 +95,19 @@ jobs:
         run: uv run bruinwatch-scrape bootstrap --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
 
       - name: Refresh the catalog
-        # Slow (~168 subjects), so only on demand or when starting fresh.
+        # ~168 subjects and several pages each, so only on demand or when
+        # starting fresh -- it is a large slice of the registrar's patience.
         if: >-
           steps.restore.outputs.restored != 'true' ||
           inputs.full_catalog
         run: uv run bruinwatch-scrape catalog --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
 
-      - name: Scrape sections
-        run: uv run bruinwatch-scrape all-sections --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
+      - name: Scrape sections (one shard of the current term)
+        run: |
+          uv run bruinwatch-scrape all-sections \
+            --rate "$SCRAPE_RATE" \
+            --concurrency "$SCRAPE_CONCURRENCY" \
+            --shard "${{ github.run_number }}/$SHARD_COUNT"
 
       - name: Render the static site
         run: uv run bruinwatch-render --out dist

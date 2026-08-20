@@ -220,6 +220,15 @@ shape from one call site, and the tests assert that **every internal link in the
 rendered output resolves to a file that exists** — the failure mode that makes a
 static build look fine locally and 404 in production.
 
+**The registrar throttles by volume, and harder during the day.** Measured
+across identical sharded runs: 00:08 PT ok, 06:14 PT ok, 12:03 PT blocked with
+`529` and a redirect to `/Error/TooManyRequests`. An unrestricted sweep is
+~31,000 requests and it cuts us off after roughly 2,000, so each run takes one
+twelfth of the current term's subjects (~1,500 requests) and the schedule sits
+in the Pacific small hours. Being cut short mid-shard is survivable: whatever
+landed is committed, the run still publishes, and the next one picks up the
+rest.
+
 Things to know before relying on it:
 
 - **Scheduled workflows are disabled after 60 days of repo inactivity** on

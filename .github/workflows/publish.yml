@@ -9,9 +9,14 @@ name: Scrape and publish
 
 on:
   schedule:
-    # Every six hours. Actions cron is best-effort and can be delayed by 10+
-    # minutes under load, so treat this as "roughly every six hours".
-    - cron: "20 */6 * * *"
+    # Overnight Pacific only. The registrar throttles far harder during the
+    # day, when actual students are using it -- measured across identical
+    # sharded runs: 00:08 PT ok, 06:14 PT ok, 12:03 PT blocked. These four
+    # slots are 01:00, 03:00, 05:00 and 07:00 Pacific.
+    #
+    # Actions cron is best-effort and can slip 10+ minutes, which is why the
+    # window is wide rather than a single nightly run.
+    - cron: "0 8,10,12,14 * * *"
   workflow_dispatch:
     inputs:
       full_catalog:
@@ -103,11 +108,22 @@ jobs:
         run: uv run bruinwatch-scrape catalog --rate "$SCRAPE_RATE" --concurrency "$SCRAPE_CONCURRENCY"
 
       - name: Scrape sections (one shard of the current term)
+        id: scrape_sections
+        # Being throttled mid-shard is expected some nights. Whatever landed
+        # before the stop is already committed, so publish it rather than
+        # discarding a run's worth of progress; the next run picks up the rest.
+        continue-on-error: true
         run: |
           uv run bruinwatch-scrape all-sections \
             --rate "$SCRAPE_RATE" \
             --concurrency "$SCRAPE_CONCURRENCY" \
             --shard "${{ github.run_number }}/$SHARD_COUNT"
+
+      - name: Note a throttled scrape
+        if: steps.scrape_sections.outcome == 'failure'
+        run: |
+          echo "::warning title=Scrape cut short::The registrar throttled us; \
+          publishing partial data. Raise SHARD_COUNT if this becomes routine."
 
       - name: Render the static site
         run: uv run bruinwatch-render --out dist

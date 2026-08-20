@@ -220,14 +220,23 @@ shape from one call site, and the tests assert that **every internal link in the
 rendered output resolves to a file that exists** — the failure mode that makes a
 static build look fine locally and 404 in production.
 
+**Each course is re-checked about once a day.** Twelve runs at 30-minute
+spacing through the Pacific small hours, one twelfth of the current term each,
+so the catalog is covered daily. That is the resolution of the enrollment
+history — fill curves are daily samples, not a live feed.
+
 **The registrar throttles by volume, and harder during the day.** Measured
 across identical sharded runs: 00:08 PT ok, 06:14 PT ok, 12:03 PT blocked with
 `529` and a redirect to `/Error/TooManyRequests`. An unrestricted sweep is
 ~31,000 requests and it cuts us off after roughly 2,000, so each run takes one
-twelfth of the current term's subjects (~1,500 requests) and the schedule sits
-in the Pacific small hours. Being cut short mid-shard is survivable: whatever
+twelfth of the current term's subjects (~870 requests) and the schedule sits in
+the Pacific small hours. Being cut short mid-shard is survivable: whatever
 landed is committed, the run still publishes, and the next one picks up the
 rest.
+
+Many small runs beat fewer large ones here, because every Actions run gets a
+fresh runner on a different IP — the registrar sees per-run volume, not a daily
+total. Averaged out it is 0.44 requests/second overnight.
 
 Things to know before relying on it:
 

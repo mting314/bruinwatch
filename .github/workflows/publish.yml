@@ -9,14 +9,20 @@ name: Scrape and publish
 
 on:
   schedule:
-    # Overnight Pacific only. The registrar throttles far harder during the
-    # day, when actual students are using it -- measured across identical
-    # sharded runs: 00:08 PT ok, 06:14 PT ok, 12:03 PT blocked. These four
-    # slots are 01:00, 03:00, 05:00 and 07:00 Pacific.
+    # Twelve runs, every 30 minutes through the Pacific small hours
+    # (00:00-05:30 PDT). One shard each, so the whole current term is covered
+    # once a day.
     #
-    # Actions cron is best-effort and can slip 10+ minutes, which is why the
-    # window is wide rather than a single nightly run.
-    - cron: "0 8,10,12,14 * * *"
+    # Why many small runs rather than fewer large ones: every Actions run gets
+    # a fresh runner on a different IP, so the registrar sees *per-run* volume,
+    # not a daily total. Keeping each run at the ~870 requests we know is
+    # accepted and simply running more of them adds coverage without adding
+    # per-run risk. Bigger shards would do the opposite.
+    #
+    # The window is where it is because the registrar throttles far harder in
+    # the daytime -- measured across identical sharded runs: 00:08 PT ok,
+    # 06:14 PT ok, 12:03 PT blocked.
+    - cron: "0,30 7-12 * * *"
   workflow_dispatch:
     inputs:
       full_catalog:
